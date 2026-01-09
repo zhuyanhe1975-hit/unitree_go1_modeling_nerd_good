@@ -1,0 +1,40 @@
+<mujoco model="go_m8010_1dof_baseline">
+  <!--
+    1-DOF baseline joint model (no gearbox, no motor-side joint).
+    Identified from hardware (output-side equivalent):
+      viscous damping b      = 5.10e-4 Nm/(rad/s)
+      Coulomb friction tau_c = 3.3e-2  Nm  (MuJoCo: frictionloss)
+    Notes:
+      - Inertia is NOT identified from the provided dataset; we set a simple nominal inertia.
+      - If you only care about friction torque vs velocity, you can treat inertia as a tunable placeholder.
+  -->
+  <option timestep="0.001" gravity="0 0 0" />
+  <compiler angle="radian" coordinate="local" />
+
+  <default>
+    <joint limited="false" damping="0.01051" frictionloss="0.033" armature="0.000111842"/>
+  </default>
+
+  <worldbody>
+    <body name="base" pos="0 0 0">
+      <!-- A single rotating link around Z -->
+      <body name="link" pos="0 0 0">
+        <joint name="joint1" type="hinge" axis="0 0 1" />
+        <!-- Nominal inertial properties (not identified) -->
+        <geom type="capsule" fromto="0 0 0 0.1 0 0" size="0.02 0.15" density="1" />
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <!-- Direct torque drive on the joint (Nm) -->
+    <motor name="tau" joint="joint1" gear="1"
+           ctrllimited="true" ctrlrange="-0.2 0.2"/>
+  </actuator>
+
+  <sensor>
+    <jointpos name="q" joint="joint1" />
+    <jointvel name="qd" joint="joint1" />
+    <actuatorfrc name="tau_applied" actuator="tau" />
+  </sensor>
+</mujoco>
