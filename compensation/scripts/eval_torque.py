@@ -11,11 +11,10 @@ try:
 except Exception:
     plt = None
 
-from pipeline.comp_torque import TorqueDataset
 from pipeline.config import load_cfg
 from pipeline.model import CausalTransformer
 from pipeline.train import _resolve_device
-from project_config import ensure_dir
+from project_config import ensure_dir, get
 
 
 def _load_model(weights_path: str, device: str) -> CausalTransformer:
@@ -23,10 +22,10 @@ def _load_model(weights_path: str, device: str) -> CausalTransformer:
     model = CausalTransformer(
         input_dim=int(ckpt["input_dim"]),
         output_dim=int(ckpt["output_dim"]),
-        embed_dim=ckpt.get("embed_dim", None) or 64,
-        num_layers=ckpt.get("num_layers", None) or 2,
-        num_heads=ckpt.get("num_heads", None) or 4,
-        history_len=ckpt.get("history_len", None) or 10,
+        embed_dim=int(ckpt.get("embed_dim", 64)),
+        num_layers=int(ckpt.get("num_layers", 2)),
+        num_heads=int(ckpt.get("num_heads", 4)),
+        history_len=int(ckpt.get("history_len", 10)),
     ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()
@@ -44,49 +43,135 @@ def _mse(model: CausalTransformer, x: np.ndarray, y: np.ndarray, device: str) ->
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
-    ap.add_argument("--dataset", default="runs/torque_dataset.npz")
-    ap.add_argument("--model", default="runs/torque_model.pt")
+    ap.add_argument("--mode", choices=["sim", "real", "real_scratch", "residual", "all"], default="real")
+    ap.add_argument("--dataset", default=None)
+    ap.add_argument("--model", default=None)
+    ap.add_argument("--residual_model", default=None, help="optional residual model path")
+    ap.add_argument("--mode_combo", choices=["base", "base+residual"], default="base+residual")
     args = ap.parse_args()
 
     cfg = load_cfg(args.config)
     device = _resolve_device(cfg)
 
-    ds = dict(np.load(args.dataset, allow_pickle=True))
-    x = ds["x"].astype(np.float32)
-    y = ds["y"].astype(np.float32)
-    x_mean = ds["x_mean"].astype(np.float32)
-    x_std = ds["x_std"].astype(np.float32)
-    y_mean = ds["y_mean"].astype(np.float32)
-    y_std = ds["y_std"].astype(np.float32)
+    def eval_one(mode: str, dataset: str, model_path: str, residual_path: str | None) -> None:
+        ds = dict(np.load(dataset, allow_pickle=True))
+        x = ds["x"].astype(np.float32)
+        y = ds["y"].astype(np.float32)
+        y_mean = ds["y_mean"].astype(np.float32)
+        y_std = ds["y_std"].astype(np.float32)
 
-    model = _load_model(args.model, device=device)
-    mse_norm = _mse(model, x, y, device=device)
-    print(f"torque_model mse_norm={mse_norm:.6f}")
+        model = _load_model(model_path, device=device)
+        model_res = (
+            _load_model(residual_path, device=device)
+            if residual_path and args.mode_combo == "base+residual"
+            else None
+        )
+        mse_norm = _mse(model, x, y, device=device)
+        print(f"[{mode}] base torque_model mse_norm={mse_norm:.6f}")
+        if model_res is not None:
+            mse_res = _mse(model_res, x, y, device=device)
+            print(f"[{mode}] residual_model mse_norm={mse_res:.6f}")
 
-    if plt is None:
-        return
+        if plt is None:
+            return
 
-    n_plot = min(2000, x.shape[0])
-    with torch.no_grad():
-        pred_norm = model(torch.from_numpy(x[:n_plot]).float().to(device)).cpu().numpy()
-    delta_tau_pred = pred_norm * y_std + y_mean
-    delta_tau_true = y[:n_plot] * y_std + y_mean
+        # One-step delta torque (normalized domain + error)
+        n_plot_delta = min(1000, x.shape[0])
+        with torch.no_grad():
+            pred_norm_step = model(torch.from_numpy(x[:n_plot_delta]).float().to(device))
+            if model_res is not None:
+                pred_norm_step = pred_norm_step + model_res(torch.from_numpy(x[:n_plot_delta]).float().to(device))
+            pred_norm_step = pred_norm_step.cpu().numpy()
+        y_true_norm = y[:n_plot_delta]
+        y_pred_norm = pred_norm_step
+        tau_pred_step = y_pred_norm * y_std + y_mean
+        tau_true_step = y_true_norm * y_std + y_mean
 
-    tau_cmd = (x[:n_plot, -1, -1] * x_std[-1] + x_mean[-1]).reshape(-1)
-    tau_out_pred = tau_cmd + delta_tau_pred.reshape(-1)
-    tau_out_true = tau_cmd + delta_tau_true.reshape(-1)
+        plt.figure(figsize=(12, 6))
+        plt.subplot(2, 1, 1)
+        plt.plot(y_true_norm.reshape(-1), label="delta_tau (gt, norm)", alpha=0.7)
+        plt.plot(
+            y_pred_norm.reshape(-1),
+            label="delta_tau (pred, norm)" + (" + residual" if model_res is not None else ""),
+            alpha=0.7,
+        )
+        plt.grid(True, alpha=0.3)
+        plt.legend()
 
-    plt.figure(figsize=(12, 5))
-    plt.plot(tau_out_true, label="tau_out (gt)", alpha=0.7)
-    plt.plot(tau_out_pred, label="tau_out (pred)", alpha=0.7)
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    out = os.path.join(os.path.dirname(args.dataset) or ".", "eval_torque.png")
-    ensure_dir(os.path.dirname(out) or ".")
-    plt.tight_layout()
-    plt.savefig(out)
-    print(f"saved: {out}")
+        plt.subplot(2, 1, 2)
+        err = (tau_pred_step - tau_true_step).reshape(-1)
+        plt.plot(err, label="delta_tau error (pred - gt)", color="r", alpha=0.8)
+        plt.axhline(0.0, color="k", linestyle="--", alpha=0.5)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
 
+        name_map_delta = {
+            "sim": "eval_delta_torque_sim.png",
+            "real": "eval_delta_torque_real.png",
+            "real_scratch": "eval_delta_torque_scratch.png",
+            "residual": "eval_delta_torque_residual.png",
+        }
+        out_delta = os.path.join(os.path.dirname(dataset) or ".", name_map_delta.get(mode, f"eval_delta_torque_{mode}.png"))
+        ensure_dir(os.path.dirname(out_delta) or ".")
+        plt.tight_layout()
+        plt.savefig(out_delta)
+        print(f"saved: {out_delta}")
+
+        n_plot = min(2000, x.shape[0])
+        with torch.no_grad():
+            pred_norm = model(torch.from_numpy(x[:n_plot]).float().to(device))
+            if model_res is not None:
+                pred_norm = pred_norm + model_res(torch.from_numpy(x[:n_plot]).float().to(device))
+            pred_norm = pred_norm.cpu().numpy()
+        tau_pred = pred_norm * y_std + y_mean
+        tau_true = y[:n_plot] * y_std + y_mean
+
+        plt.figure(figsize=(12, 5))
+        plt.plot(tau_true.reshape(-1), label="tau (gt)", alpha=0.7)
+        plt.plot(
+            tau_pred.reshape(-1),
+            label="tau (pred)" + (" + residual" if model_res is not None else ""),
+            alpha=0.7,
+        )
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        name_map = {
+            "sim": "eval_torque_sim.png",
+            "real": "eval_torque_real.png",
+            "real_scratch": "eval_torque_scratch.png",
+            "residual": "eval_torque_residual.png",
+        }
+        out_name = name_map.get(mode, f"eval_torque_{mode}.png")
+        out = os.path.join(os.path.dirname(dataset) or ".", out_name)
+        ensure_dir(os.path.dirname(out) or ".")
+        plt.tight_layout()
+        plt.savefig(out)
+        print(f"saved: {out}")
+
+    # Resolve single or all
+    modes = [args.mode] if args.mode != "all" else ["sim", "real", "real_scratch", "residual"]
+
+    for m in modes:
+        if m == "sim":
+            dataset = args.dataset or str(get(cfg, "paths.sim_dataset"))
+            model_path = args.model or str(get(cfg, "paths.sim_model"))
+            residual_path = None
+        elif m == "real_scratch":
+            dataset = args.dataset or str(get(cfg, "paths.real_dataset"))
+            model_path = args.model or str(get(cfg, "paths.real_model_scratch"))
+            residual_path = None
+        else:
+            dataset = args.dataset or str(get(cfg, "paths.real_dataset"))
+            model_path = args.model or str(get(cfg, "paths.real_model"))
+            residual_path = args.residual_model
+            if residual_path is None and "." in model_path:
+                stem, ext = model_path.rsplit(".", 1)
+                cand = f"{stem}_residual.{ext}"
+                if os.path.exists(cand):
+                    residual_path = cand
+            if m == "residual":
+                args.mode_combo = "base+residual"
+        eval_one(m, dataset, model_path, residual_path)
 
 if __name__ == "__main__":
     main()

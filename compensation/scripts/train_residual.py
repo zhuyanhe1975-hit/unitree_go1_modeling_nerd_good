@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 from pipeline.config import load_cfg
 from pipeline.residual import prepare_residual_dataset, train_residual_model
@@ -52,6 +55,34 @@ def main() -> None:
 
     ensure_dir(os.path.dirname(residual_dataset) or ".")
     ensure_dir(os.path.dirname(out_model) or ".")
+
+    root = Path(__file__).resolve().parent.parent
+    if not os.path.exists(dataset):
+        if args.mode in ("real", "real_scratch"):
+            print(f"[info] dataset {dataset} not found, auto-running prepare_torque --mode real")
+            subprocess.run(
+                [sys.executable, "scripts/prepare_torque.py", "--mode", "real", "--config", str(args.config or root / "config.json")],
+                cwd=str(root),
+                check=True,
+                env={**os.environ, "PYTHONPATH": str(root)},
+            )
+        elif args.mode == "sim":
+            print(f"[info] dataset {dataset} not found, auto-running prepare_torque --mode sim")
+            subprocess.run(
+                [sys.executable, "scripts/prepare_torque.py", "--mode", "sim", "--config", str(args.config or root / "config.json")],
+                cwd=str(root),
+                check=True,
+                env={**os.environ, "PYTHONPATH": str(root)},
+            )
+        else:
+            raise FileNotFoundError(f"dataset not found: {dataset}")
+
+    if not os.path.exists(base_model):
+        if args.mode in ("real", "real_scratch") and os.path.exists(str(get(cfg, "paths.sim_model"))):
+            print(f"[info] base model {base_model} missing, falling back to sim_model for residual finetune")
+            base_model = str(get(cfg, "paths.sim_model"))
+        else:
+            raise FileNotFoundError(f"base model not found: {base_model}")
 
     prepare_residual_dataset(cfg, dataset_npz=dataset, base_model_path=base_model, out_npz=residual_dataset)
     print(f"saved residual dataset: {residual_dataset}")

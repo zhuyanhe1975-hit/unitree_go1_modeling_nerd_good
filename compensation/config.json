@@ -4,17 +4,17 @@
     "seed": 42
   },
   "paths": {
-    "asset_mjcf": "assets/joint_1dof.xml",
-    "runs_dir": "runs",
-    "sim_raw_log": "runs/sim_raw.npz",
-    "sim_dataset": "runs/sim_dataset.npz",
-    "real_dataset": "runs/real_dataset.npz",
-    "stats_npz": "runs/stats.npz",
-    "real_stats_npz": "runs/real_stats.npz",
-    "sim_model": "runs/sim_model.pt",
-    "real_model": "runs/real_model.pt",
-    "real_model_scratch": "runs/real_model_scratch.pt",
-    "real_log": "runs/real_log.npz"
+    "asset_mjcf": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/assets/joint_1dof.xml",
+    "runs_dir": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs",
+    "sim_raw_log": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/sim_raw.npz",
+    "sim_dataset": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_sim_dataset.npz",
+    "real_dataset": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_real_dataset.npz",
+    "stats_npz": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_stats.npz",
+    "real_stats_npz": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_real_stats.npz",
+    "sim_model": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_sim_model.pt",
+    "real_model": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_real_model.pt",
+    "real_model_scratch": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_real_model_scratch.pt",
+    "real_log": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/real_log.npz"
   },
   "sim": {
     "device": "cuda",
@@ -91,7 +91,7 @@
   "real": {
     "serial_port": "/dev/ttyUSB0",
     "motor_id": 0,
-    "unitree_sdk_lib": "runs/unitree_sdk_build/lib",
+    "unitree_sdk_lib": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/runs/unitree_sdk_build/lib",
     "kp": 0.0,
     "kd": 0.01,
     "dt": 0.01,

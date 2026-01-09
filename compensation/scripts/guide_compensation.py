@@ -37,53 +37,67 @@ def do_collect_real() -> None:
     _run([py, "scripts/collect_real_data.py", "--config", str(cfg)])
 
 
-def do_prepare_torque() -> None:
+def do_sim_data() -> None:
     cfg = _input_cfg()
-    raw = input("Raw log path (default: paths.real_log): ").strip()
-    out = input("Output torque dataset (default: runs/torque_dataset.npz): ").strip()
-    stats = input("Output stats path (default: runs/torque_stats.npz): ").strip()
     py = sys.executable
-    cmd = [py, "scripts/prepare_torque.py", "--config", str(cfg)]
-    if raw:
-        cmd += ["--raw", raw]
-    if out:
-        cmd += ["--out", out]
-    if stats:
-        cmd += ["--stats", stats]
-    _run(cmd)
+    _run([py, "scripts/generate.py", "--config", str(cfg)])
+    _run([py, "scripts/prepare_torque.py", "--mode", "sim", "--config", str(cfg)])
 
 
-def do_train_torque() -> None:
+def do_real_data() -> None:
     cfg = _input_cfg()
-    dataset = input("Torque dataset path (default: runs/torque_dataset.npz): ").strip()
-    out = input("Output torque model (default: runs/torque_model.pt): ").strip()
     py = sys.executable
-    cmd = [py, "scripts/train_torque.py", "--config", str(cfg)]
-    if dataset:
-        cmd += ["--dataset", dataset]
-    if out:
-        cmd += ["--out", out]
-    _run(cmd)
+    _run([py, "scripts/collect_real_data.py", "--config", str(cfg)])
+    _run([py, "scripts/prepare_torque.py", "--mode", "real", "--config", str(cfg)])
+
+
+def do_train_base() -> None:
+    cfg = _input_cfg()
+    py = sys.executable
+    _run([py, "scripts/train_torque.py", "--mode", "sim", "--config", str(cfg)])
+
+
+def do_finetune() -> None:
+    cfg = _input_cfg()
+    py = sys.executable
+    _run([py, "scripts/prepare_torque.py", "--mode", "real", "--config", str(cfg)])
+    _run([py, "scripts/train_torque.py", "--mode", "finetune", "--config", str(cfg)])
+
+
+def do_train_real_scratch() -> None:
+    cfg = _input_cfg()
+    py = sys.executable
+    _run([py, "scripts/prepare_torque.py", "--mode", "real", "--config", str(cfg)])
+    _run([py, "scripts/train_torque.py", "--mode", "real_scratch", "--config", str(cfg)])
+
+
+def do_train_residual() -> None:
+    cfg = _input_cfg()
+    mode = input("Residual mode (sim/real/real_scratch) [real]: ").strip() or "real"
+    py = sys.executable
+    _run([py, "scripts/train_residual.py", "--mode", mode, "--config", str(cfg)])
 
 
 def do_eval_with_residual() -> None:
     cfg = _input_cfg()
-    target = input("Eval target (real/real_scratch/sim/all) [real]: ").strip() or "real"
-    res_model = input("Residual model path (optional, default auto-detect): ").strip()
+    target = input("Eval target (sim/real/scratch/residual/all) [real]: ").strip() or "real"
+    res = input("Residual model path (optional, auto-detect if empty): ").strip()
     py = sys.executable
-    cmd = [py, "scripts/eval.py", "--model", target, "--config", str(cfg)]
-    if res_model:
-        cmd += ["--residual_model", res_model]
+    cmd = [py, "scripts/eval_torque.py", "--mode", target, "--config", str(cfg)]
+    if res:
+        cmd += ["--residual_model", res]
     _run(cmd)
 
 
 def main() -> None:
     menu = {
-        "1": ("采集补偿数据（实机）", do_collect_real),
-        "2": ("准备力矩补偿数据集", do_prepare_torque),
-        "3": ("训练力矩补偿模型", do_train_torque),
-        "4": ("残差模型训练", do_train_residual),
-        "5": ("评估（含残差）", do_eval_with_residual),
+        "1": ("仿真数据集生成（采集+处理）", do_sim_data),
+        "2": ("真机数据集生成（采集+处理）", do_real_data),
+        "3": ("nerd base: 仿真预训练力矩模型", do_train_base),
+        "4": ("nerd finetune: 仿真预训基础上用真机微调", do_finetune),
+        "5": ("nerd from scratch: 真机数据直接训练", do_train_real_scratch),
+        "6": ("phys+nerd residual: 残差模型训练", do_train_residual),
+        "7": ("评估（sim/real/scratch/residual）", do_eval_with_residual),
         "q": ("退出", None),
     }
     while True:
