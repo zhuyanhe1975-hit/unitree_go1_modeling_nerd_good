@@ -150,6 +150,7 @@ def main() -> None:
         return mse_norm, mse_phys
 
     sim_dataset_path = str(get(cfg, "paths.sim_dataset"))
+    sim_raw_log_path = str(get(cfg, "paths.sim_raw_log", required=False, default=""))
     real_dataset_path = str(get(cfg, "paths.real_dataset"))
     sim_model_path = str(get(cfg, "paths.sim_model"))
     real_model_path = str(get(cfg, "paths.real_model"))
@@ -174,36 +175,101 @@ def main() -> None:
         return
 
     # Plot a quick one-step prediction trace for sim (delta_q)
-    sim_ds = dict(np.load(sim_dataset_path, allow_pickle=True))
-    x_sim = sim_ds["x"].astype(np.float32)
-    y_sim = sim_ds["y"].astype(np.float32)
-    n_plot = min(1000, x_sim.shape[0])
-    model_sim = _load_model(cfg, sim_model_path, device=device)
-    with torch.no_grad():
-        pred = model_sim(torch.from_numpy(x_sim[:n_plot]).float().to(device)).cpu().numpy()
-    plt.figure(figsize=(10, 4))
-    plt.plot(y_sim[:n_plot, 0], label="delta_q (gt)", alpha=0.7)
-    plt.plot(pred[:n_plot, 0], label="delta_q (pred)", alpha=0.7)
-    plt.grid(True, alpha=0.3)
-    plt.legend()
-    out = os.path.join(get(cfg, "paths.runs_dir"), "eval_sim_delta_q.png")
-    ensure_dir(os.path.dirname(out) or ".")
-    plt.tight_layout()
-    plt.savefig(out)
-    print(f"saved: {out}")
-
     plot_steps = int(get(cfg, "eval.plot_steps", required=False, default=2000))
+    if args.model in ("sim", "all") and os.path.exists(sim_dataset_path) and os.path.exists(sim_model_path):
+        sim_ds = dict(np.load(sim_dataset_path, allow_pickle=True))
+        x_sim = sim_ds["x"].astype(np.float32)
+        y_sim = sim_ds["y"].astype(np.float32)
+        n_plot = min(1000, x_sim.shape[0])
+        model_sim = _load_model(cfg, sim_model_path, device=device)
+        with torch.no_grad():
+            pred = model_sim(torch.from_numpy(x_sim[:n_plot]).float().to(device)).cpu().numpy()
+        plt.figure(figsize=(10, 4))
+        plt.plot(y_sim[:n_plot, 0], label="delta_q (gt)", alpha=0.7)
+        plt.plot(pred[:n_plot, 0], label="delta_q (pred)", alpha=0.7)
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+        out = os.path.join(get(cfg, "paths.runs_dir"), "eval_sim_delta_q.png")
+        ensure_dir(os.path.dirname(out) or ".")
+        plt.tight_layout()
+        plt.savefig(out)
+        print(f"saved: {out}")
 
-    # Plot real_dataset predictions for real_model_scratch (physical units)
-    if args.model in ("real_scratch", "all") and os.path.exists(real_dataset_path) and os.path.exists(real_scratch_path):
-        real_ds = dict(np.load(real_dataset_path, allow_pickle=True))
+        # Plot open-loop rollout for sim log (absolute q/qd)
+        if os.path.exists(sim_raw_log_path):
+            lg_sim = dict(np.load(sim_raw_log_path, allow_pickle=True))
+            t_sim = np.asarray(lg_sim.get("t", []), dtype=np.float64)
+            q_sim = np.asarray(lg_sim.get("q_out", []), dtype=np.float64)
+            qd_sim = np.asarray(lg_sim.get("qd_out", []), dtype=np.float64)
+            tau_sim = np.asarray(lg_sim.get("tau_cmd", []), dtype=np.float64)
+
+            # If multi-trajectory, take the first trajectory for plotting.
+            if q_sim.ndim > 1:
+                q_sim = q_sim[0]
+            if qd_sim.ndim > 1:
+                qd_sim = qd_sim[0]
+            if tau_sim.ndim > 1:
+                tau_sim = tau_sim[0]
+            q_sim = q_sim.reshape(-1)
+            qd_sim = qd_sim.reshape(-1)
+            tau_sim = tau_sim.reshape(-1)
+            t_sim = t_sim.reshape(-1)
+
+            if len(q_sim) > 0 and len(tau_sim) > 0:
+                if len(t_sim) >= 2:
+                    dt_sim = float(np.median(np.diff(t_sim)))
+                else:
+                    dt_sim = float(get(cfg, "sim.frame_dt"))
+                    t_sim = np.arange(len(q_sim), dtype=np.float64) * dt_sim
+
+                n = min(plot_steps, len(q_sim), len(tau_sim))
+                stats_sim = _stats_from_prepared(sim_ds)
+                q_pred_sim, qd_pred_sim = _rollout_open_loop(
+                    model_sim,
+                    stats=stats_sim,
+                    q0=float(q_sim[0]),
+                    qd0=float(qd_sim[0]) if len(qd_sim) > 0 else 0.0,
+                    tau_cmd=tau_sim[:n],
+                    history_len=int(get(cfg, "model.history_len")),
+                    device=device,
+                )
+
+                tt = t_sim[:n]
+                plt.figure(figsize=(12, 7))
+                plt.subplot(2, 1, 1)
+                plt.plot(tt, q_sim[:n], label="q_out (gt)", color="k", alpha=0.6)
+                plt.plot(tt, q_pred_sim, label="q_out (pred rollout)", color="r", lw=1.2)
+                plt.grid(True, alpha=0.3)
+                plt.legend()
+
+                if len(qd_sim) > 0:
+                    plt.subplot(2, 1, 2)
+                    plt.plot(tt, qd_sim[:n], label="qd_out (gt)", color="k", alpha=0.6)
+                    plt.plot(tt, qd_pred_sim, label="qd_out (pred rollout)", color="r", lw=1.2)
+                    plt.grid(True, alpha=0.3)
+                    plt.legend()
+
+                out_sim_roll = os.path.join(get(cfg, "paths.runs_dir"), "eval_sim_rollout.png")
+                ensure_dir(os.path.dirname(out_sim_roll) or ".")
+                plt.tight_layout()
+                plt.savefig(out_sim_roll)
+                print(f"saved: {out_sim_roll}")
+
+    def _plot_real_variant(model_path: str, dataset_path: str, out_prefix: str) -> None:
+        if not os.path.exists(model_path):
+            print(f"[skip] model not found for {out_prefix}: {model_path}")
+            return
+        if not os.path.exists(dataset_path):
+            print(f"[skip] dataset not found for {out_prefix}: {dataset_path}")
+            return
+        real_ds = dict(np.load(dataset_path, allow_pickle=True))
         x_real = real_ds["x"].astype(np.float32)
         y_real_norm = real_ds["y"].astype(np.float32)
         d_mean = real_ds["d_mean"].astype(np.float32)
         d_std = real_ds["d_std"].astype(np.float32)
         n_plot = min(plot_steps, x_real.shape[0])
 
-        model_real = _load_model(cfg, real_scratch_path, device=device)
+        model_real = _load_model(cfg, model_path, device=device)
         with torch.no_grad():
             pred_norm = model_real(torch.from_numpy(x_real[:n_plot]).float().to(device)).cpu().numpy()
         y_pred = pred_norm * d_std + d_mean
@@ -222,7 +288,7 @@ def main() -> None:
         plt.grid(True, alpha=0.3)
         plt.legend()
 
-        out = os.path.join(get(cfg, "paths.runs_dir"), "eval_real_scratch_delta.png")
+        out = os.path.join(get(cfg, "paths.runs_dir"), f"eval_{out_prefix}_delta.png")
         ensure_dir(os.path.dirname(out) or ".")
         plt.tight_layout()
         plt.savefig(out)
@@ -246,7 +312,6 @@ def main() -> None:
             if len(q_log) >= 2:
                 qd_log[1:] = (q_log[1:] - q_log[:-1]) / dt_log
 
-            # Use the same normalization stats that were used to train this real_scratch model.
             stats = _stats_from_prepared(real_ds)
 
             q_pred_roll, qd_pred_roll = _rollout_open_loop(
@@ -273,11 +338,16 @@ def main() -> None:
             plt.grid(True, alpha=0.3)
             plt.legend()
 
-            out = os.path.join(get(cfg, "paths.runs_dir"), "eval_real_scratch_rollout.png")
-            ensure_dir(os.path.dirname(out) or ".")
+            out_roll = os.path.join(get(cfg, "paths.runs_dir"), f"eval_{out_prefix}_rollout.png")
+            ensure_dir(os.path.dirname(out_roll) or ".")
             plt.tight_layout()
-            plt.savefig(out)
-            print(f"saved: {out}")
+            plt.savefig(out_roll)
+            print(f"saved: {out_roll}")
+
+    if args.model in ("real", "all"):
+        _plot_real_variant(real_model_path, real_dataset_path, out_prefix="real")
+    if args.model in ("real_scratch", "all"):
+        _plot_real_variant(real_scratch_path, real_dataset_path, out_prefix="real_scratch")
 
 
 if __name__ == "__main__":

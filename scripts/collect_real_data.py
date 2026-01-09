@@ -263,7 +263,10 @@ def main():
             
             # 打印进度 (每秒一次)
             if int(t) != int((t - dt) if t - dt >= 0 else 0):
-                print(f"Time: {t:.1f}/{duration:.1f}s | q_out: {q_out:+.3f} | tau_cmd: {tau_cmd:+.3f} | tau_out: {tau_out:+.3f}")
+                print(
+                    f"Time: {t:.1f}/{duration:.1f}s | q_out: {q_out:+.3f} | "
+                    f"tau_cmd: {tau_cmd:+.3f} | tau_out_eff: {tau_out_eff:+.3f}"
+                )
 
     except KeyboardInterrupt:
         print("\n[User] 采集被中断！")
