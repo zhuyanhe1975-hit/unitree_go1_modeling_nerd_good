@@ -21,7 +21,12 @@ def _load_model(cfg: Dict[str, Any], weights_path: str, device: str) -> tuple[Ca
     Note: older checkpoints may only store {model,input_dim,output_dim}. In that case we
     use config.json model hyperparams to rebuild the architecture.
     """
-    ckpt = torch.load(weights_path, map_location=torch.device(device))
+    dev = str(device)
+    if dev.startswith("cuda") and not torch.cuda.is_available():
+        print("[warn] --device is cuda but torch.cuda.is_available() is False; falling back to cpu")
+        dev = "cpu"
+
+    ckpt = torch.load(weights_path, map_location=torch.device(dev))
     model = CausalTransformer(
         input_dim=int(ckpt["input_dim"]),
         output_dim=int(ckpt["output_dim"]),
@@ -29,7 +34,7 @@ def _load_model(cfg: Dict[str, Any], weights_path: str, device: str) -> tuple[Ca
         num_layers=int(ckpt.get("num_layers", get(cfg, "model.num_layers"))),
         num_heads=int(ckpt.get("num_heads", get(cfg, "model.num_heads"))),
         history_len=int(ckpt.get("history_len", get(cfg, "model.history_len"))),
-    ).to(device)
+    ).to(dev)
     model.load_state_dict(ckpt["model"])
     model.eval()
     return model, ckpt
@@ -132,6 +137,192 @@ def _open_loop_segment(
     }
 
 
+@torch.no_grad()
+def _open_loop_rollout_trace(
+    model: CausalTransformer,
+    stats: dict,
+    *,
+    t: np.ndarray,
+    stage: np.ndarray,
+    q: np.ndarray,
+    qd: np.ndarray,
+    tau_ff: np.ndarray,
+    q_ref: np.ndarray,
+    qd_ref: np.ndarray,
+    kp: np.ndarray,
+    kd: np.ndarray,
+    stage_name: str,
+    H: int,
+    horizon_steps: int,
+    device: str,
+) -> dict:
+    """
+    Open-loop rollout trace for visualization:
+      - seed (q_hat, qd_hat) with real log for the first H steps
+      - roll forward using commands + the twin's internal state only
+    """
+    a, b = _find_stage_segment(t, stage, stage_name, H=H, horizon_steps=horizon_steps)
+    x_mean = stats["x_mean"]
+    x_std = stats["x_std"]
+    y_mean = stats["y_mean"]
+    y_std = stats["y_std"]
+
+    k0 = a + (H - 1)
+    k1 = k0 + int(horizon_steps)
+    if k1 + 1 >= b:
+        raise ValueError("segment too short for requested horizon")
+
+    q_hist = q[k0 - (H - 1) : k0 + 1].astype(np.float64).copy()
+    qd_hist = qd[k0 - (H - 1) : k0 + 1].astype(np.float64).copy()
+    q_pred = float(q_hist[-1])
+    qd_pred = float(qd_hist[-1])
+
+    x_buf = np.zeros((1, H, int(x_mean.shape[0])), dtype=np.float32)
+    q_hat = np.zeros((horizon_steps + 1,), dtype=np.float64)
+    qd_hat = np.zeros((horizon_steps + 1,), dtype=np.float64)
+    tau_cmd_hat = np.zeros((horizon_steps,), dtype=np.float64)
+
+    q_hat[0] = q_pred
+    qd_hat[0] = qd_pred
+
+    t_seg = t[k0 : k0 + horizon_steps + 1].astype(np.float64).copy()
+    q_gt = q[k0 : k0 + horizon_steps + 1].astype(np.float64).copy()
+    qd_gt = qd[k0 : k0 + horizon_steps + 1].astype(np.float64).copy()
+    qref_seg = q_ref[k0 : k0 + horizon_steps + 1].astype(np.float64).copy()
+    qdref_seg = qd_ref[k0 : k0 + horizon_steps + 1].astype(np.float64).copy()
+
+    for i in range(horizon_steps):
+        k = k0 + i
+        sl = slice(k - (H - 1), k + 1)
+        qref_h = q_ref[sl].astype(np.float64)
+        qdref_h = qd_ref[sl].astype(np.float64)
+        kp_h = kp[sl].astype(np.float64)
+        kd_h = kd[sl].astype(np.float64)
+        tau_ff_h = tau_ff[sl].astype(np.float64)
+        tt = t[sl].astype(np.float64)
+
+        dt_h = np.zeros((H,), dtype=np.float64)
+        if len(tt) >= 2:
+            dt_h[0] = float(np.median(np.diff(tt)))
+            dt_h[1:] = np.diff(tt)
+
+        tau_cmd_h = kp_h * (qref_h - q_hist) + kd_h * (qdref_h - qd_hist) + tau_ff_h
+        tau_cmd_hat[i] = float(tau_cmd_h[-1])
+
+        feat = np.stack([np.sin(q_hist), np.cos(q_hist), qd_hist, tau_cmd_h, dt_h], axis=-1).astype(np.float32)
+        x_buf[0] = (feat - x_mean[None, None, :]) / x_std[None, None, :]
+
+        pred_n = model(torch.from_numpy(x_buf).to(device)).detach().cpu().numpy().reshape(-1).astype(np.float32)
+        delta = pred_n * y_std + y_mean
+
+        q_pred = q_pred + float(delta[0])
+        qd_pred = qd_pred + float(delta[1])
+
+        q_hist[:-1] = q_hist[1:]
+        qd_hist[:-1] = qd_hist[1:]
+        q_hist[-1] = q_pred
+        qd_hist[-1] = qd_pred
+
+        q_hat[i + 1] = q_pred
+        qd_hat[i + 1] = qd_pred
+
+    return {
+        "stage": str(stage_name),
+        "t": t_seg,
+        "q_gt": q_gt,
+        "qd_gt": qd_gt,
+        "q_hat": q_hat,
+        "qd_hat": qd_hat,
+        "q_ref": qref_seg,
+        "qd_ref": qdref_seg,
+        "tau_cmd_hat": tau_cmd_hat,
+        "H": int(H),
+        "k0": int(k0),
+    }
+
+
+def _reversal_centers_from_qd_ref(qd_ref: np.ndarray, *, speed_th: float) -> np.ndarray:
+    qd_ref = np.asarray(qd_ref, dtype=np.float64).reshape(-1)
+    s = np.sign(qd_ref)
+    s[s == 0.0] = 1.0
+    ch = np.where((s[1:] * s[:-1]) < 0.0)[0] + 1
+    if ch.size == 0:
+        return ch
+    if speed_th > 0:
+        ch = ch[np.abs(qd_ref[ch]) <= float(speed_th)]
+    return ch
+
+
+def _plot_reversal_windows(
+    trace: dict,
+    *,
+    out_png: str,
+    window_s: float,
+    max_events: int,
+    speed_th: float,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    t = trace["t"]
+    q_gt = trace["q_gt"]
+    qd_gt = trace["qd_gt"]
+    q_hat = trace["q_hat"]
+    qd_hat = trace["qd_hat"]
+    q_ref = trace["q_ref"]
+    qd_ref = trace["qd_ref"]
+
+    dt_med = float(np.median(np.diff(t)))
+    half = max(5, int(round(float(window_s) / max(1e-9, dt_med))))
+
+    centers = _reversal_centers_from_qd_ref(qd_ref, speed_th=float(speed_th))
+    if centers.size == 0:
+        raise ValueError("no reversal found in qd_ref for the selected segment")
+    centers = centers[: int(max_events)]
+
+    n = int(len(centers))
+    fig, axes = plt.subplots(nrows=n, ncols=2, figsize=(12, max(3.0, 2.4 * n)), sharex=False)
+    if n == 1:
+        axes = np.array([axes])
+
+    for i, c in enumerate(centers):
+        a = max(0, int(c) - half)
+        b = min(len(t) - 1, int(c) + half)
+        tt = t[a : b + 1] - t[int(c)]
+
+        axq = axes[i, 0]
+        axd = axes[i, 1]
+
+        axq.plot(tt, q_ref[a : b + 1], label="q_ref", color="tab:gray", lw=1.0, alpha=0.8)
+        axq.plot(tt, q_gt[a : b + 1], label="q_gt", color="k", lw=1.2, alpha=0.8)
+        axq.plot(tt, q_hat[a : b + 1], label="q_hat (open-loop)", color="tab:red", lw=1.2)
+        axq.axvline(0.0, color="tab:blue", lw=0.8, alpha=0.6)
+        axq.grid(True, alpha=0.25)
+        axq.set_ylabel("q (rad)")
+        axq.set_title(f"reversal #{i+1} (t=0 at qd_ref sign-change)")
+
+        axd.plot(tt, qd_ref[a : b + 1], label="qd_ref", color="tab:gray", lw=1.0, alpha=0.8)
+        axd.plot(tt, qd_gt[a : b + 1], label="qd_gt", color="k", lw=1.2, alpha=0.8)
+        axd.plot(tt, qd_hat[a : b + 1], label="qd_hat (open-loop)", color="tab:red", lw=1.2)
+        axd.axvline(0.0, color="tab:blue", lw=0.8, alpha=0.6)
+        axd.grid(True, alpha=0.25)
+        axd.set_ylabel("qd (rad/s)")
+
+        if i == 0:
+            axq.legend(loc="best", fontsize=9)
+            axd.legend(loc="best", fontsize=9)
+
+    for ax in axes[-1]:
+        ax.set_xlabel("time around reversal (s)")
+
+    fig.suptitle(f"Open-loop digital twin around low-speed reversals (stage={trace['stage']})", y=0.995)
+    fig.tight_layout()
+    ensure_dir(os.path.dirname(out_png) or ".")
+    fig.savefig(out_png, dpi=160)
+
+
 def _open_loop_baseline(
     *,
     t: np.ndarray,
@@ -215,6 +406,17 @@ def main() -> None:
     ap.add_argument("--horizon_steps", type=int, default=300)
     ap.add_argument("--baseline", action="store_true", help="also compute a simple open-loop baseline")
     ap.add_argument("--out_md", default="", help="write a markdown summary to this path (default: <runs_dir>/summary_*.md)")
+    ap.add_argument("--plot_reversals", action="store_true", help="save a plot focused on low-speed reversal windows")
+    ap.add_argument("--plot_horizon_steps", type=int, default=0, help="override horizon for plotting trace (default: --horizon_steps)")
+    ap.add_argument("--reversal_window_s", type=float, default=0.5, help="half-window size around reversal (seconds)")
+    ap.add_argument("--reversal_max_events", type=int, default=4, help="max number of reversals to plot")
+    ap.add_argument(
+        "--reversal_speed_th",
+        type=float,
+        default=0.5,
+        help="filter reversals where |qd_ref| at crossing exceeds this threshold (rad/s). 0 disables.",
+    )
+    ap.add_argument("--out_png", default="", help="output png path (default: <runs_dir>/plot_reversals_*.png)")
     args = ap.parse_args()
 
     cfg: Dict[str, Any] = load_cfg(args.config)
@@ -338,6 +540,40 @@ def main() -> None:
         with open(out_md, "w", encoding="utf-8") as f:
             f.write("\n".join(md).rstrip() + "\n")
         print(f"saved: {out_md}")
+
+    if args.plot_reversals:
+        plot_h = int(args.plot_horizon_steps) if int(args.plot_horizon_steps) > 0 else int(args.horizon_steps)
+        plot_stage = stages[0]
+        trace = _open_loop_rollout_trace(
+            model,
+            stats,
+            t=t,
+            stage=stage,
+            q=q,
+            qd=qd,
+            tau_ff=tau_ff,
+            q_ref=q_ref,
+            qd_ref=qd_ref,
+            kp=kp,
+            kd=kd,
+            stage_name=str(plot_stage),
+            H=H,
+            horizon_steps=int(plot_h),
+            device=str(args.device),
+        )
+        if args.out_png:
+            out_png = str(args.out_png)
+        else:
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            out_png = os.path.join(runs_dir, f"plot_reversals_{trace['stage']}_{ts}.png")
+        _plot_reversal_windows(
+            trace,
+            out_png=out_png,
+            window_s=float(args.reversal_window_s),
+            max_events=int(args.reversal_max_events),
+            speed_th=float(args.reversal_speed_th),
+        )
+        print(f"saved: {out_png}")
 
 
 if __name__ == "__main__":

@@ -156,3 +156,18 @@ conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py \
   --horizon_steps 300 \
   --baseline
 ```
+
+画“低速换向”开环预测对比图（只用指令 + 孪生体自身状态滚动；换向点由 `qd_ref` 过零检测）：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py \
+  --config configs/real_csv_closed_loop_smoke_cpu.json \
+  --device cpu \
+  --stage sine \
+  --horizon_steps 2000 \
+  --plot_reversals \
+  --plot_horizon_steps 4000 \
+  --reversal_window_s 0.6 \
+  --reversal_max_events 4 \
+  --reversal_speed_th 0.5
+```
