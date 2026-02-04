@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import time
 from typing import Any, Dict
 
 import numpy as np
@@ -10,7 +11,7 @@ import torch
 
 from pipeline.config import load_cfg
 from pipeline.model import CausalTransformer
-from project_config import get
+from project_config import ensure_dir, get
 
 
 def _load_model(cfg: Dict[str, Any], weights_path: str, device: str) -> tuple[CausalTransformer, dict]:
@@ -34,6 +35,24 @@ def _load_model(cfg: Dict[str, Any], weights_path: str, device: str) -> tuple[Ca
     return model, ckpt
 
 
+def _find_stage_segment(t: np.ndarray, stage: np.ndarray, stage_name: str, *, H: int, horizon_steps: int) -> tuple[int, int]:
+    dt_med = float(np.median(np.diff(t))) if len(t) >= 2 else 0.0
+    gap_thr = max(0.05, 10.0 * dt_med) if dt_med > 0 else 0.05
+    cuts = [0]
+    for i in range(1, len(t)):
+        if stage[i] != stage[i - 1] or (t[i] - t[i - 1]) > gap_thr:
+            cuts.append(i)
+    cuts.append(len(t))
+
+    for i in range(len(cuts) - 1):
+        a, b = int(cuts[i]), int(cuts[i + 1])
+        if str(stage[a]) != str(stage_name):
+            continue
+        if (b - a) >= (H + int(horizon_steps) + 2):
+            return a, b
+    raise ValueError(f"no segment found for stage='{stage_name}' with horizon={horizon_steps} and H={H}")
+
+
 @torch.no_grad()
 def _open_loop_segment(
     model: CausalTransformer,
@@ -53,25 +72,7 @@ def _open_loop_segment(
     horizon_steps: int,
     device: str,
 ) -> dict:
-    dt_med = float(np.median(np.diff(t))) if len(t) >= 2 else 0.0
-    gap_thr = max(0.05, 10.0 * dt_med) if dt_med > 0 else 0.05
-    cuts = [0]
-    for i in range(1, len(t)):
-        if stage[i] != stage[i - 1] or (t[i] - t[i - 1]) > gap_thr:
-            cuts.append(i)
-    cuts.append(len(t))
-
-    pick = None
-    for i in range(len(cuts) - 1):
-        a, b = int(cuts[i]), int(cuts[i + 1])
-        if str(stage[a]) != str(stage_name):
-            continue
-        if (b - a) >= (H + int(horizon_steps) + 2):
-            pick = (a, b)
-            break
-    if pick is None:
-        raise ValueError(f"no segment found for stage='{stage_name}' with horizon={horizon_steps} and H={H}")
-    a, _b = pick
+    a, _b = _find_stage_segment(t, stage, stage_name, H=H, horizon_steps=horizon_steps)
 
     x_mean = stats["x_mean"]
     x_std = stats["x_std"]
@@ -131,6 +132,73 @@ def _open_loop_segment(
     }
 
 
+def _open_loop_baseline(
+    *,
+    t: np.ndarray,
+    stage: np.ndarray,
+    q: np.ndarray,
+    qd: np.ndarray,
+    stage_name: str,
+    H: int,
+    horizon_steps: int,
+) -> dict:
+    """
+    A minimal baseline that respects the same deployment constraint (no real q/qd after init):
+      - use last qd from init window and integrate q with dt
+      - keep qd constant
+    """
+    a, _b = _find_stage_segment(t, stage, stage_name, H=H, horizon_steps=horizon_steps)
+    k0 = a + (H - 1)
+    q_pred = float(q[k0])
+    qd_pred = float(qd[k0])
+    e_q = np.zeros((horizon_steps,), dtype=np.float64)
+    e_qd = np.zeros((horizon_steps,), dtype=np.float64)
+    for i in range(horizon_steps):
+        k = k0 + i
+        dt_k = float(t[k + 1] - t[k])
+        q_pred = q_pred + qd_pred * dt_k
+        # qd_pred constant
+        e_q[i] = q_pred - float(q[k + 1])
+        e_qd[i] = qd_pred - float(qd[k + 1])
+
+    return {
+        "stage": str(stage_name),
+        "horizon_steps": int(horizon_steps),
+        "q_rmse": float(np.sqrt(np.mean(e_q**2))),
+        "q_maxabs": float(np.max(np.abs(e_q))),
+        "qd_rmse": float(np.sqrt(np.mean(e_qd**2))),
+        "qd_maxabs": float(np.max(np.abs(e_qd))),
+    }
+
+
+def _fmt(x: float) -> str:
+    if not np.isfinite(x):
+        return "nan"
+    ax = abs(float(x))
+    if ax >= 1e3 or (ax > 0 and ax < 1e-3):
+        return f"{x:.3e}"
+    return f"{x:.6g}"
+
+
+def _to_md_table(rows: list[dict[str, Any]], *, title: str) -> str:
+    headers = ["stage", "horizon", "q_rmse", "q_maxabs", "qd_rmse", "qd_maxabs"]
+    lines = [f"### {title}", "", "| " + " | ".join(headers) + " |", "| " + " | ".join(["---"] * len(headers)) + " |"]
+    for r in rows:
+        line = "| " + " | ".join(
+            [
+                str(r["stage"]),
+                str(r["horizon_steps"]),
+                _fmt(float(r["q_rmse"])),
+                _fmt(float(r["q_maxabs"])),
+                _fmt(float(r["qd_rmse"])),
+                _fmt(float(r["qd_maxabs"])),
+            ]
+        ) + " |"
+        lines.append(line)
+    lines.append("")
+    return "\n".join(lines)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=None)
@@ -138,11 +206,21 @@ def main() -> None:
     ap.add_argument("--dataset", default=None, help="prepared dataset npz (default: paths.real_csv_dataset)")
     ap.add_argument("--weights", default=None, help="model weights (default: paths.real_csv_model)")
     ap.add_argument("--device", default="cpu")
-    ap.add_argument("--stage", default="sine")
+    ap.add_argument("--stage", default="sine", help="single stage name (used if --stages not provided)")
+    ap.add_argument(
+        "--stages",
+        default="",
+        help="comma-separated stage list to evaluate, e.g. 'sine,pos_sweep,vel_step' (overrides --stage)",
+    )
     ap.add_argument("--horizon_steps", type=int, default=300)
+    ap.add_argument("--baseline", action="store_true", help="also compute a simple open-loop baseline")
+    ap.add_argument("--out_md", default="", help="write a markdown summary to this path (default: <runs_dir>/summary_*.md)")
     args = ap.parse_args()
 
     cfg: Dict[str, Any] = load_cfg(args.config)
+
+    runs_dir = str(get(cfg, "paths.runs_dir"))
+    ensure_dir(runs_dir)
 
     csv_path = args.csv or str(get(cfg, "paths.real_csv"))
     dataset_npz = args.dataset or str(get(cfg, "paths.real_csv_dataset"))
@@ -199,28 +277,67 @@ def main() -> None:
     else:
         kd = np.full((len(rows),), float(get(cfg, "real.kd", required=False, default=0.0)), dtype=np.float64)
 
-    res = _open_loop_segment(
-        model,
-        stats,
-        t=t,
-        stage=stage,
-        q=q,
-        qd=qd,
-        tau_ff=tau_ff,
-        q_ref=q_ref,
-        qd_ref=qd_ref,
-        kp=kp,
-        kd=kd,
-        stage_name=str(args.stage),
-        H=H,
-        horizon_steps=int(args.horizon_steps),
-        device=str(args.device),
-    )
-    print(
-        f"[open-loop stage={res['stage']}] horizon={res['horizon_steps']} "
-        f"q_rmse={res['q_rmse']:.6g} q_maxabs={res['q_maxabs']:.6g} "
-        f"qd_rmse={res['qd_rmse']:.6g} qd_maxabs={res['qd_maxabs']:.6g}"
-    )
+    if str(args.stages).strip():
+        stages = [s.strip() for s in str(args.stages).split(",") if s.strip()]
+    else:
+        stages = [str(args.stage)]
+
+    rows_model = []
+    rows_base = []
+    for stg in stages:
+        res = _open_loop_segment(
+            model,
+            stats,
+            t=t,
+            stage=stage,
+            q=q,
+            qd=qd,
+            tau_ff=tau_ff,
+            q_ref=q_ref,
+            qd_ref=qd_ref,
+            kp=kp,
+            kd=kd,
+            stage_name=str(stg),
+            H=H,
+            horizon_steps=int(args.horizon_steps),
+            device=str(args.device),
+        )
+        rows_model.append(res)
+        print(
+            f"[open-loop stage={res['stage']}] horizon={res['horizon_steps']} "
+            f"q_rmse={res['q_rmse']:.6g} q_maxabs={res['q_maxabs']:.6g} "
+            f"qd_rmse={res['qd_rmse']:.6g} qd_maxabs={res['qd_maxabs']:.6g}"
+        )
+        if args.baseline:
+            b = _open_loop_baseline(
+                t=t, stage=stage, q=q, qd=qd, stage_name=str(stg), H=H, horizon_steps=int(args.horizon_steps)
+            )
+            rows_base.append(b)
+
+    # Save a small markdown summary for batch runs.
+    if len(stages) > 1 or args.out_md:
+        if args.out_md:
+            out_md = str(args.out_md)
+        else:
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            out_md = os.path.join(runs_dir, f"summary_closed_loop_csv_{ts}.md")
+        ensure_dir(os.path.dirname(out_md) or ".")
+        md = []
+        md.append("# Closed-loop digital twin eval summary")
+        md.append("")
+        md.append(f"- csv: `{csv_path}`")
+        md.append(f"- dataset: `{dataset_npz}`")
+        md.append(f"- weights: `{weights_path}`")
+        md.append(f"- stages: `{', '.join(stages)}`")
+        md.append(f"- horizon_steps: `{int(args.horizon_steps)}`")
+        md.append(f"- device: `{args.device}`")
+        md.append("")
+        md.append(_to_md_table(rows_model, title="Model (open-loop)"))
+        if rows_base:
+            md.append(_to_md_table(rows_base, title="Baseline (open-loop, constant qd)"))
+        with open(out_md, "w", encoding="utf-8") as f:
+            f.write("\n".join(md).rstrip() + "\n")
+        print(f"saved: {out_md}")
 
 
 if __name__ == "__main__":

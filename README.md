@@ -145,3 +145,14 @@ conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py --c
 conda run -n nerd_py310 PYTHONPATH=. python3 scripts/train_closed_loop_csv.py --config configs/real_csv_closed_loop_smoke_cpu.json
 conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py --config configs/real_csv_closed_loop_smoke_cpu.json --device cpu --stage sine --horizon_steps 300
 ```
+
+批量评估多个 stage 并输出 markdown 汇总（保存到 `/tmp/.../summary_closed_loop_csv_*.md`）：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py \
+  --config configs/real_csv_closed_loop_smoke_cpu.json \
+  --device cpu \
+  --stages sine,pos_sweep,vel_step \
+  --horizon_steps 300 \
+  --baseline
+```
