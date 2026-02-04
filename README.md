@@ -171,3 +171,15 @@ conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py \
   --reversal_max_events 4 \
   --reversal_speed_th 0.5
 ```
+
+画“完整正弦周期”的开环预测结果图（从 `qd_ref` 过零点自动截取一个完整周期）：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py \
+  --config configs/real_csv_closed_loop_smoke_cpu.json \
+  --device cpu \
+  --stage sine \
+  --horizon_steps 2000 \
+  --plot_full_cycle \
+  --plot_horizon_steps 4000
+```

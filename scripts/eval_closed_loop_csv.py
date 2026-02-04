@@ -5,6 +5,7 @@ import csv
 import os
 import time
 from typing import Any, Dict
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -323,6 +324,79 @@ def _plot_reversal_windows(
     fig.savefig(out_png, dpi=160)
 
 
+def _pick_full_cycle_window_from_qd_ref(qd_ref: np.ndarray) -> tuple[int, int]:
+    """
+    Picks a window spanning one full sine-like cycle using qd_ref sign changes.
+
+    qd_ref crosses 0 at turning points, so one full cycle spans two reversals:
+      reversal 0 -> reversal 2
+    """
+    ch = _reversal_centers_from_qd_ref(qd_ref, speed_th=0.0)
+    if ch.size < 3:
+        raise ValueError("not enough reversals in qd_ref to define a full cycle (need >=3)")
+    i0 = int(ch[0])
+    i2 = int(ch[2])
+    if i2 <= i0:
+        raise ValueError("invalid reversal ordering")
+    return i0, i2
+
+
+def _plot_full_cycle(trace: dict, *, out_png: str) -> None:
+    """
+    Plot one full cycle of the sine segment (open-loop prediction vs ground-truth).
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    t = trace["t"]
+    q_gt = trace["q_gt"]
+    qd_gt = trace["qd_gt"]
+    q_hat = trace["q_hat"]
+    qd_hat = trace["qd_hat"]
+    q_ref = trace["q_ref"]
+    qd_ref = trace["qd_ref"]
+
+    i0, i2 = _pick_full_cycle_window_from_qd_ref(qd_ref)
+    sl = slice(i0, i2 + 1)
+    tt = t[sl] - t[i0]
+
+    e_q = q_hat[sl] - q_gt[sl]
+    e_qd = qd_hat[sl] - qd_gt[sl]
+
+    fig = plt.figure(figsize=(12, 9))
+    ax1 = plt.subplot(3, 1, 1)
+    ax1.plot(tt, q_ref[sl], label="q_ref", color="tab:gray", lw=1.0, alpha=0.8)
+    ax1.plot(tt, q_gt[sl], label="q_gt", color="k", lw=1.2, alpha=0.8)
+    ax1.plot(tt, q_hat[sl], label="q_hat (open-loop)", color="tab:red", lw=1.2)
+    ax1.grid(True, alpha=0.25)
+    ax1.set_ylabel("q (rad)")
+    ax1.set_title(f"Open-loop prediction on one full sine cycle (stage={trace['stage']})")
+    ax1.legend(loc="best", fontsize=9)
+
+    ax2 = plt.subplot(3, 1, 2, sharex=ax1)
+    ax2.plot(tt, qd_ref[sl], label="qd_ref", color="tab:gray", lw=1.0, alpha=0.8)
+    ax2.plot(tt, qd_gt[sl], label="qd_gt", color="k", lw=1.2, alpha=0.8)
+    ax2.plot(tt, qd_hat[sl], label="qd_hat (open-loop)", color="tab:red", lw=1.2)
+    ax2.grid(True, alpha=0.25)
+    ax2.set_ylabel("qd (rad/s)")
+    ax2.legend(loc="best", fontsize=9)
+
+    ax3 = plt.subplot(3, 1, 3, sharex=ax1)
+    ax3.plot(tt, e_q, label="q_hat - q_gt", color="tab:blue", lw=1.2)
+    ax3.plot(tt, e_qd, label="qd_hat - qd_gt", color="tab:orange", lw=1.2, alpha=0.9)
+    ax3.axhline(0.0, color="k", lw=0.8, alpha=0.4)
+    ax3.grid(True, alpha=0.25)
+    ax3.set_xlabel("time (s)")
+    ax3.set_ylabel("error")
+    ax3.legend(loc="best", fontsize=9)
+
+    fig.tight_layout()
+    ensure_dir(os.path.dirname(out_png) or ".")
+    fig.savefig(out_png, dpi=160)
+
+
 def _open_loop_baseline(
     *,
     t: np.ndarray,
@@ -417,6 +491,8 @@ def main() -> None:
         help="filter reversals where |qd_ref| at crossing exceeds this threshold (rad/s). 0 disables.",
     )
     ap.add_argument("--out_png", default="", help="output png path (default: <runs_dir>/plot_reversals_*.png)")
+    ap.add_argument("--plot_full_cycle", action="store_true", help="plot one full sine cycle open-loop trace")
+    ap.add_argument("--out_full_png", default="", help="output png path for full-cycle plot (default: results/plot_full_cycle_*.png)")
     args = ap.parse_args()
 
     cfg: Dict[str, Any] = load_cfg(args.config)
@@ -424,15 +500,28 @@ def main() -> None:
     runs_dir = str(get(cfg, "paths.runs_dir"))
     ensure_dir(runs_dir)
 
+    repo_root = Path(__file__).resolve().parents[1]
+    results_dir = repo_root / "results"
+
     csv_path = args.csv or str(get(cfg, "paths.real_csv"))
     dataset_npz = args.dataset or str(get(cfg, "paths.real_csv_dataset"))
     weights_path = args.weights or str(get(cfg, "paths.real_csv_model"))
     if not os.path.exists(csv_path):
         raise SystemExit(f"missing csv: {csv_path}")
     if not os.path.exists(dataset_npz):
-        raise SystemExit(f"missing dataset: {dataset_npz} (run scripts/prepare_closed_loop_csv.py first)")
+        cand = results_dir / Path(dataset_npz).name
+        if cand.exists():
+            dataset_npz = str(cand)
+            print(f"[warn] dataset not found at config path; using: {dataset_npz}")
+        else:
+            raise SystemExit(f"missing dataset: {dataset_npz} (run scripts/prepare_closed_loop_csv.py first)")
     if not os.path.exists(weights_path):
-        raise SystemExit(f"missing weights: {weights_path} (run scripts/train_closed_loop_csv.py first)")
+        cand = results_dir / Path(weights_path).name
+        if cand.exists():
+            weights_path = str(cand)
+            print(f"[warn] weights not found at config path; using: {weights_path}")
+        else:
+            raise SystemExit(f"missing weights: {weights_path} (run scripts/train_closed_loop_csv.py first)")
 
     ds = dict(np.load(dataset_npz, allow_pickle=True))
     stats = {k: ds[k].astype(np.float32) for k in ["x_mean", "x_std", "y_mean", "y_std"]}
@@ -574,6 +663,34 @@ def main() -> None:
             speed_th=float(args.reversal_speed_th),
         )
         print(f"saved: {out_png}")
+
+    if args.plot_full_cycle:
+        plot_h = int(args.plot_horizon_steps) if int(args.plot_horizon_steps) > 0 else max(int(args.horizon_steps), 4000)
+        plot_stage = stages[0]
+        trace = _open_loop_rollout_trace(
+            model,
+            stats,
+            t=t,
+            stage=stage,
+            q=q,
+            qd=qd,
+            tau_ff=tau_ff,
+            q_ref=q_ref,
+            qd_ref=qd_ref,
+            kp=kp,
+            kd=kd,
+            stage_name=str(plot_stage),
+            H=H,
+            horizon_steps=int(plot_h),
+            device=str(args.device),
+        )
+        if args.out_full_png:
+            out_full = str(args.out_full_png)
+        else:
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            out_full = str(results_dir / f"plot_full_cycle_{trace['stage']}_{ts}.png")
+        _plot_full_cycle(trace, out_png=out_full)
+        print(f"saved: {out_full}")
 
 
 if __name__ == "__main__":
