@@ -7,6 +7,8 @@ runs/*.pt
 runs/*.npz
 runs/mjcf_patched.xml
 runs/warp_cache/
+runs_smoke/
+runs_*/
 
 # Keep the Unitree SDK build artifacts out of git (rebuildable)
 runs/unitree_sdk_build/

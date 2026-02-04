@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+remote_name="${1:-}"
+remote_url="${2:-}"
+
+# If remote_url is not provided (older git), try to resolve it.
+if [[ -z "${remote_url}" && -n "${remote_name}" ]]; then
+  remote_url="$(git remote get-url "${remote_name}" 2>/dev/null || true)"
+fi
+
+blocked_patterns=(
+  "unitree_go1_friction_compensation"
+  "unitree_go1_friction_compensation.git"
+)
+
+for pat in "${blocked_patterns[@]}"; do
+  if [[ "${remote_url}" == *"${pat}"* ]]; then
+    echo "[pre-push] BLOCKED: refusing to push to old repo remote: ${remote_url}" >&2
+    echo "[pre-push] If this is intentional, edit .githooks/pre-push." >&2
+    exit 1
+  fi
+done
+
+exit 0
+

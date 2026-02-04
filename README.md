@@ -2,6 +2,15 @@
 
 单关节真实动力学建模（Unitree GO-M8010-6），目标是学习/辨识一个可用于预测的关节动力学模型（不包含补偿器相关内容）。
 
+## 参考实现：Neural Robot Dynamics (NeRD)
+
+本项目的单关节 Warp 环境 + “ground-truth vs neural” 的切换方式，参考了：
+`/home/yhzhu/AI/neural-robot-dynamics`（NVLabs NeRD, CoRL 2025）的整体架构思想。
+
+为了避免把整套 NeRD 代码搬进来，这里提供了一个轻量兼容层：
+- `nerd_compat/joint_1dof_neural_env.py`：`Joint1DofNeuralEnvironment`（`ground-truth`=Warp Featherstone；`neural`=本仓库训练的 state-delta Transformer）。
+- `scripts/rollout_compare_neural.py`：对同一条力矩序列，比较 ground-truth vs neural 的长时滚动误差（类似 NeRD 的 passive motion eval）。
+
 ## 目录结构（精简版）
 
 - `config.json`：全局唯一参数入口（仿真/训练/实机采集/路径）。
@@ -13,6 +22,14 @@
 原工程的完整功能可参考：`/home/yhzhu/myWorks/nerd_1dof`。
 
 ## 快速开始
+
+### Python 环境（conda: nerd_py310）
+
+你指定的环境是 `nerd_py310`，建议所有命令都用：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 <script>.py ...
+```
 
 ### 完整链条（推荐）
 
@@ -32,6 +49,30 @@
 
 5) eval（评估/画图）：
 - `python3 scripts/eval.py`
+
+### 快速自检（CPU smoke）
+
+如果你只是想验证“仿真生成→prepare→train→neural rollout”整条链路能跑通，可用：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/generate.py --config configs/smoke_cpu.json
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/prepare.py --mode sim --config configs/smoke_cpu.json
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/train.py --mode sim --config configs/smoke_cpu.json
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/rollout_compare_neural.py --config configs/smoke_cpu.json --device cpu
+```
+
+### （可选）NeRD 风格：ground-truth vs neural rollout 对比
+
+在你完成 `generate -> prepare -> train` 得到 `runs/sim_dataset.npz` 和 `runs/sim_model.pt` 后：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/rollout_compare_neural.py \
+  --device cuda --num_envs 1 --steps 2000 --profile chirp
+```
+
+产物：
+- `runs/rollout_compare_neural.npz`
+- `runs/rollout_compare_neural.png`（若装了 matplotlib）
 
 ## Milestone: Torque-Delta Feedforward Compensation (2026-02-04)
 
