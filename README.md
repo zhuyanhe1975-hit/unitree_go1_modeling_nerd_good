@@ -33,6 +33,27 @@
 5) eval（评估/画图）：
 - `python3 scripts/eval.py`
 
+## Milestone: Torque-Delta Feedforward Compensation (2026-02-04)
+
+在位置闭环模式下（给定 `q_ref/dq_ref/kp/kd`），我们验证了一个可重复的阶段性成果：
+使用 **torque-delta 一步预测**构造前馈力矩，可显著降低正弦轨迹跟踪误差，尤其在低速换向/低频场景更明显。
+
+- 说明文档：`docs/MILESTONE_20260204_torque_delta_ff.md`
+- 关键 demo：`scripts/demo_ff_sine.py`（baseline vs feedforward 对比）
+- torque-delta 管线：`inverse_torque/`（prepare/train/eval）
+
+快速跑硬件 demo（示例）：
+
+```bash
+PYTHONPATH=. python3 scripts/demo_ff_sine.py \
+  --mode both \
+  --ff_type torque_delta \
+  --amp 0.2 --freq 0.1 --duration 20 \
+  --kp 1 --kd 0.01 \
+  --tau_ff_limit 0.15 --tau_ff_scale 1 \
+  --ff_update_div 1
+```
+
 ## 实机采集前：Unitree SDK Python 模块
 
 如果你在 `python3 scripts/collect_real_data.py` 遇到：
@@ -44,6 +65,9 @@
 
 编译输出会在 `runs/unitree_sdk_build/lib/`，把它写到 `config.json`：
 - `real.unitree_sdk_lib = "runs/unitree_sdk_build/lib"`
+
+也可以直接设置环境变量（更通用）：
+- `UNITREE_ACTUATOR_SDK_LIB=/path/to/unitree_actuator_sdk/lib`
 
 ## 实机采集注意事项（关键）
 

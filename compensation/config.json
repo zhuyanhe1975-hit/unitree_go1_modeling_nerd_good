@@ -12,13 +12,14 @@
     "stats_npz": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_stats.npz",
     "real_stats_npz": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_real_stats.npz",
     "sim_model": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_sim_model.pt",
-    "real_model": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_real_model.pt",
+    "real_model": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_real_model_scratch.pt",
     "real_model_scratch": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/torque_real_model_scratch.pt",
-    "real_log": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/real_log.npz"
+    "real_log": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/real_log.npz",
+    "real_log_test": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/compensation/runs/real_log_test.npz"
   },
   "sim": {
     "device": "cuda",
-    "num_envs": 512,
+    "num_envs": 1,
     "frame_dt": 0.01,
     "sim_substeps": 10,
     "mjcf_override": {
@@ -62,16 +63,16 @@
   },
   "data": {
     "sim": {
-      "num_trajectories": 256,
-      "steps": 400,
+      "num_trajectories": 1,
+      "steps": 1000,
       "profile": "chirp",
-      "torque_low": -0.5,
-      "torque_high": 0.5,
+      "torque_low": -0.2,
+      "torque_high": 0.2,
       "tau_slew_nm_s": 50.0,
       "chirp": {
-        "f0_hz": 0.1,
-        "f1_hz": 5.0,
-        "amplitude_nm": 0.45
+        "f0_hz": 0.5,
+        "f1_hz": 2.0,
+        "amplitude_nm": 0.15
       }
     },
     "real": {
@@ -89,14 +90,15 @@
     "plot_steps": 2000
   },
   "real": {
+    "profile": "pos_sine",
     "serial_port": "/dev/ttyUSB0",
     "motor_id": 0,
-    "unitree_sdk_lib": "/home/yhzhu/Industrial Robot/nerd_1dof_goM8010_6/runs/unitree_sdk_build/lib",
+    "unitree_sdk_lib": "/home/yhzhu/Industrial Robot/unitree_actuator_sdk/lib",
     "kp": 0.0,
     "kd": 0.01,
     "dt": 0.01,
-    "duration": 10.0,
-    "max_torque": 0.3,
+    "duration": 60.0,
+    "max_torque": 0.1,
     "max_speed_rad_s": 18.84955592153876,
     "efficiency": 0.8,
     "unwrap_motor_angle": true,
@@ -108,6 +110,18 @@
       "f0_hz": 0.5,
       "f1_hz": 2.0,
       "amplitude_nm": 0.15
+    },
+    "pos_sine": {
+      "freq_hz": 0.2,
+      "amplitude_rad": 1.0,
+      "kp": 0.2,
+      "kd": 0.01,
+      "duration": 60.0
+    },
+    "pos_sine_test": {
+      "freq_hz": 0.2,
+      "amplitude_rad": 1.0,
+      "duration": 10.0
     }
   }
 }

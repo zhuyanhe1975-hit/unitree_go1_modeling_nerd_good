@@ -4,7 +4,7 @@
     "seed": 42
   },
   "paths": {
-    "asset_mjcf": "assets/joint_1dof.xml",
+    "asset_mjcf": "assets/goM8010_6.xml",
     "runs_dir": "runs",
     "sim_raw_log": "runs/sim_raw.npz",
     "sim_dataset": "runs/sim_dataset.npz",
@@ -93,7 +93,7 @@
     "motor_id": 0,
     "unitree_sdk_lib": "runs/unitree_sdk_build/lib",
     "kp": 0.0,
-    "kd": 0.01,
+    "kd": 0.02,
     "dt": 0.01,
     "duration": 10.0,
     "max_torque": 0.3,

@@ -12,22 +12,34 @@ from project_config import ensure_dir, get, load_config
 class RealMotorInterface:
     def __init__(self, cfg: dict, max_torque_nm: float):
         print("[Hardware] Initializing Unitree actuator SDK...")
+        def _try_add_sdk_path(p: str) -> bool:
+            p = os.path.abspath(p)
+            if os.path.isdir(p):
+                ld = os.environ.get("LD_LIBRARY_PATH", "")
+                if p not in ld.split(":"):
+                    os.environ["LD_LIBRARY_PATH"] = (p + (":" + ld if ld else ""))
+                sys.path.insert(0, p)
+                return True
+            return False
+
+        env_sdk = os.environ.get("UNITREE_ACTUATOR_SDK_LIB", "").strip()
         sdk_lib = get(cfg, "real.unitree_sdk_lib", required=False)
-        if sdk_lib:
-            sys.path.insert(0, sdk_lib)
-        else:
+        ok = False
+        if env_sdk:
+            ok = _try_add_sdk_path(env_sdk)
+        if (not ok) and sdk_lib:
+            ok = _try_add_sdk_path(str(sdk_lib))
+        if not ok:
             # Best-effort fallback: known local SDK path.
             local_sdk = "/home/yhzhu/Industrial Robot/unitree_actuator_sdk/lib"
-            if os.path.isdir(local_sdk):
-                sys.path.insert(0, local_sdk)
+            _try_add_sdk_path(local_sdk)
 
         try:
             import unitree_actuator_sdk as u  # type: ignore
         except Exception as e:
             raise ImportError(
                 "Cannot import unitree_actuator_sdk. Set env UNITREE_ACTUATOR_SDK_LIB to the folder containing "
-                "`unitree_actuator_sdk*.so` (e.g. /home/yhzhu/Industrial Robot/unitree_actuator_sdk/lib), "
-                "or set `real.unitree_sdk_lib` in config.json. "
+                "`unitree_actuator_sdk*.so`, or set `real.unitree_sdk_lib` in config.json. "
                 f"Original error: {e}"
             ) from e
 

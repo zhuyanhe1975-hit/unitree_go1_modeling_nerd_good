@@ -89,6 +89,12 @@ def do_eval_with_residual() -> None:
     _run(cmd)
 
 
+def do_real_test() -> None:
+    cfg = _input_cfg()
+    py = sys.executable
+    _run([py, "scripts/test_low_speed_velocity.py", "--config", str(cfg)])
+
+
 def main() -> None:
     menu = {
         "1": ("仿真数据集生成（采集+处理）", do_sim_data),
@@ -98,6 +104,7 @@ def main() -> None:
         "5": ("nerd from scratch: 真机数据直接训练", do_train_real_scratch),
         "6": ("phys+nerd residual: 残差模型训练", do_train_residual),
         "7": ("评估（sim/real/scratch/residual）", do_eval_with_residual),
+        "8": ("真机低速换向补偿测试", do_real_test),
         "q": ("退出", None),
     }
     while True:

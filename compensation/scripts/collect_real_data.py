@@ -3,6 +3,7 @@ import time
 import os
 import signal
 import sys
+import argparse
 
 from project_config import ensure_dir, get, load_config
 
@@ -12,22 +13,34 @@ from project_config import ensure_dir, get, load_config
 class RealMotorInterface:
     def __init__(self, cfg: dict, max_torque_nm: float):
         print("[Hardware] Initializing Unitree actuator SDK...")
+        def _try_add_sdk_path(p: str) -> bool:
+            p = os.path.abspath(p)
+            if os.path.isdir(p):
+                ld = os.environ.get("LD_LIBRARY_PATH", "")
+                if p not in ld.split(":"):
+                    os.environ["LD_LIBRARY_PATH"] = (p + (":" + ld if ld else ""))
+                sys.path.insert(0, p)
+                return True
+            return False
+
+        env_sdk = os.environ.get("UNITREE_ACTUATOR_SDK_LIB", "").strip()
         sdk_lib = get(cfg, "real.unitree_sdk_lib", required=False)
-        if sdk_lib:
-            sys.path.insert(0, sdk_lib)
-        else:
+        ok = False
+        if env_sdk:
+            ok = _try_add_sdk_path(env_sdk)
+        if (not ok) and sdk_lib:
+            ok = _try_add_sdk_path(str(sdk_lib))
+        if not ok:
             # Best-effort fallback: known local SDK path.
             local_sdk = "/home/yhzhu/Industrial Robot/unitree_actuator_sdk/lib"
-            if os.path.isdir(local_sdk):
-                sys.path.insert(0, local_sdk)
+            _try_add_sdk_path(local_sdk)
 
         try:
             import unitree_actuator_sdk as u  # type: ignore
         except Exception as e:
             raise ImportError(
                 "Cannot import unitree_actuator_sdk. Set env UNITREE_ACTUATOR_SDK_LIB to the folder containing "
-                "`unitree_actuator_sdk*.so` (e.g. /home/yhzhu/Industrial Robot/unitree_actuator_sdk/lib), "
-                "or set `real.unitree_sdk_lib` in config.json. "
+                "`unitree_actuator_sdk*.so`, or set `real.unitree_sdk_lib` in config.json. "
                 f"Original error: {e}"
             ) from e
 
@@ -125,15 +138,32 @@ def get_chirp_signal(t: float, total_time: float, cfg: dict) -> float:
     amp = float(chirp["amplitude_nm"])
     return float(amp * np.sin(phase))
 
+
 def _smooth_sign(x: float, eps: float = 1e-3) -> float:
     return float(x / (abs(x) + eps))
+
+
+def _pos_sine_cmd(t: float, cfg: dict, deriv: bool = False) -> float:
+    pos = get(cfg, "real.pos_sine", required=False, default={})
+    f = float(pos.get("freq_hz", 0.2))
+    amp = float(pos.get("amplitude_rad", 0.1))
+    omega = 2 * np.pi * f
+    if deriv:
+        return float(amp * omega * np.cos(omega * t))
+    return float(amp * np.sin(omega * t))
 
 
 # ==============================================================================
 # 4. 主循环
 # ==============================================================================
 def main():
-    cfg = load_config()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--config", default=None)
+    ap.add_argument("--profile", choices=["chirp", "pos_sine"], default=None, help="override real.profile")
+    ap.add_argument("--out", default=None, help="override output log path")
+    args = ap.parse_args()
+
+    cfg = load_config(args.config)
     dt = float(get(cfg, "real.dt"))
     duration = float(get(cfg, "real.duration"))
     max_torque = float(get(cfg, "real.max_torque"))
@@ -146,8 +176,20 @@ def main():
     temp_limit_c = float(get(cfg, "real.temp_limit_c", required=False, default=80.0))
     abort_on_merror = bool(get(cfg, "real.abort_on_merror", required=False, default=True))
 
-    save_path = str(get(cfg, "paths.real_log"))
+    profile = args.profile or str(get(cfg, "real.profile", required=False, default="chirp"))
+
+    save_path = args.out or str(get(cfg, "paths.real_log"))
     ensure_dir(os.path.dirname(save_path) or ".")
+
+    # Override kp/kd for position sine profile
+    if profile == "pos_sine":
+        cfg_local = dict(cfg)
+        cfg_local["real"] = dict(cfg.get("real", {}))
+        pos = get(cfg, "real.pos_sine", required=False, default={})
+        cfg_local["real"]["kp"] = float(pos.get("kp", 0.2))
+        cfg_local["real"]["kd"] = float(pos.get("kd", 0.01))
+        duration = float(pos.get("duration", duration))
+        cfg = cfg_local
 
     motor = RealMotorInterface(cfg, max_torque_nm=max_torque)
 
@@ -164,6 +206,8 @@ def main():
         "q_out": [],
         "qd_out": [],
         "qdd_out": [],
+        "cmd_q": [],
+        "cmd_qd": [],
 
         # Torque (motor-side; consistent with cmd.tau and data.tau conventions)
         "tau_ref": [],
@@ -196,8 +240,21 @@ def main():
             if t > duration:
                 break
                 
-            # 1. 计算控制信号 (Chirp)
-            tau_ref = get_chirp_signal(t, duration, cfg)
+            # 1. 计算控制信号
+            if profile == "pos_sine":
+                q_cmd = _pos_sine_cmd(t, cfg)
+                # position sine velocity for logging/conditioning
+                qd_cmd = _pos_sine_cmd(t, cfg, deriv=True)
+                tau_ref = 0.0  # position loop handles torque
+                motor.cmd.q = q_cmd
+                motor.cmd.kp = float(get(cfg, "real.kp", required=False, default=0.2))
+                motor.cmd.kd = float(get(cfg, "real.kd", required=False, default=0.01))
+                logs["cmd_q"].append(q_cmd)
+                logs["cmd_qd"].append(qd_cmd)
+            else:
+                tau_ref = get_chirp_signal(t, duration, cfg)
+                logs["cmd_q"].append(0.0)
+                logs["cmd_qd"].append(0.0)
 
             # 2. 静摩擦前馈（方向由 tau_ref 决定；小于阈值时不加，避免零附近抖动）
             tau_ff = 0.0
@@ -304,6 +361,8 @@ def main():
         q_out_np = np.asarray(logs["q_out"], dtype=np.float64)
         qd_out_np = np.asarray(logs["qd_out"], dtype=np.float64)
         qdd_out_np = np.asarray(logs["qdd_out"], dtype=np.float64)
+        cmd_q_np = np.asarray(logs["cmd_q"], dtype=np.float64)
+        cmd_qd_np = np.asarray(logs["cmd_qd"], dtype=np.float64)
         tau_ref_np = np.asarray(logs["tau_ref"], dtype=np.float64)
         tau_cmd_np = np.asarray(logs["tau_cmd"], dtype=np.float64)
         tau_out_raw_np = np.asarray(logs["tau_out_raw"], dtype=np.float64)
@@ -324,6 +383,8 @@ def main():
                 q_out=q_out_np,
                 qd_out=qd_out_np,
                 qdd_out=qdd_out_np,
+                cmd_q=cmd_q_np,
+                cmd_qd=cmd_qd_np,
                 # Torque
                 tau_ref=tau_ref_np,
                 tau_cmd=tau_cmd_np,

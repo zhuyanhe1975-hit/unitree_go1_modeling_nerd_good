@@ -53,12 +53,17 @@ def main() -> None:
     cfg = load_cfg(args.config)
     device = _resolve_device(cfg)
 
+    def _dt_for_mode(mode: str) -> float:
+        return float(get(cfg, "sim.frame_dt")) if mode == "sim" else float(get(cfg, "real.dt"))
+
     def eval_one(mode: str, dataset: str, model_path: str, residual_path: str | None) -> None:
         ds = dict(np.load(dataset, allow_pickle=True))
         x = ds["x"].astype(np.float32)
         y = ds["y"].astype(np.float32)
         y_mean = ds["y_mean"].astype(np.float32)
         y_std = ds["y_std"].astype(np.float32)
+        dt = _dt_for_mode(mode)
+        hist = int(get(cfg, "model.history_len"))
 
         model = _load_model(model_path, device=device)
         model_res = (
@@ -75,48 +80,6 @@ def main() -> None:
         if plt is None:
             return
 
-        # One-step delta torque (normalized domain + error)
-        n_plot_delta = min(1000, x.shape[0])
-        with torch.no_grad():
-            pred_norm_step = model(torch.from_numpy(x[:n_plot_delta]).float().to(device))
-            if model_res is not None:
-                pred_norm_step = pred_norm_step + model_res(torch.from_numpy(x[:n_plot_delta]).float().to(device))
-            pred_norm_step = pred_norm_step.cpu().numpy()
-        y_true_norm = y[:n_plot_delta]
-        y_pred_norm = pred_norm_step
-        tau_pred_step = y_pred_norm * y_std + y_mean
-        tau_true_step = y_true_norm * y_std + y_mean
-
-        plt.figure(figsize=(12, 6))
-        plt.subplot(2, 1, 1)
-        plt.plot(y_true_norm.reshape(-1), label="delta_tau (gt, norm)", alpha=0.7)
-        plt.plot(
-            y_pred_norm.reshape(-1),
-            label="delta_tau (pred, norm)" + (" + residual" if model_res is not None else ""),
-            alpha=0.7,
-        )
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-
-        plt.subplot(2, 1, 2)
-        err = (tau_pred_step - tau_true_step).reshape(-1)
-        plt.plot(err, label="delta_tau error (pred - gt)", color="r", alpha=0.8)
-        plt.axhline(0.0, color="k", linestyle="--", alpha=0.5)
-        plt.grid(True, alpha=0.3)
-        plt.legend()
-
-        name_map_delta = {
-            "sim": "eval_delta_torque_sim.png",
-            "real": "eval_delta_torque_real.png",
-            "real_scratch": "eval_delta_torque_scratch.png",
-            "residual": "eval_delta_torque_residual.png",
-        }
-        out_delta = os.path.join(os.path.dirname(dataset) or ".", name_map_delta.get(mode, f"eval_delta_torque_{mode}.png"))
-        ensure_dir(os.path.dirname(out_delta) or ".")
-        plt.tight_layout()
-        plt.savefig(out_delta)
-        print(f"saved: {out_delta}")
-
         n_plot = min(2000, x.shape[0])
         with torch.no_grad():
             pred_norm = model(torch.from_numpy(x[:n_plot]).float().to(device))
@@ -125,14 +88,24 @@ def main() -> None:
             pred_norm = pred_norm.cpu().numpy()
         tau_pred = pred_norm * y_std + y_mean
         tau_true = y[:n_plot] * y_std + y_mean
+        t_full = (np.arange(n_plot) + hist) * dt
 
-        plt.figure(figsize=(12, 5))
-        plt.plot(tau_true.reshape(-1), label="tau (gt)", alpha=0.7)
+        plt.figure(figsize=(12, 7))
+        plt.subplot(2, 1, 1)
+        plt.plot(t_full, tau_true.reshape(-1), label="tau (gt)", alpha=0.7)
         plt.plot(
+            t_full,
             tau_pred.reshape(-1),
             label="tau (pred)" + (" + residual" if model_res is not None else ""),
             alpha=0.7,
         )
+        plt.grid(True, alpha=0.3)
+        plt.legend()
+
+        plt.subplot(2, 1, 2)
+        err_full = (tau_pred - tau_true).reshape(-1)
+        plt.plot(t_full, err_full, label="tau error (pred - gt)", color="r", alpha=0.8)
+        plt.axhline(0.0, color="k", linestyle="--", alpha=0.5)
         plt.grid(True, alpha=0.3)
         plt.legend()
         name_map = {

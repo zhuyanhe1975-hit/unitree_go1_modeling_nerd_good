@@ -52,34 +52,56 @@ def prepare_torque_dataset(
     temp = np.asarray(ds.get("temp", []), dtype=np.float64).reshape(-1)
     qdd = np.asarray(ds.get("qdd_out", []), dtype=np.float64).reshape(-1) if "qdd_out" in ds else None
 
-    tau_target = tau_out if tau_out.size == q.size else tau_cmd
-    if tau_target.size != q.size:
-        raise KeyError("raw log missing usable torque target (tau_out or tau_cmd)")
+    # Target priority: use effective torque tau_out if present, else commanded tau, fallback to raw data.tau.
+    tau_out_raw = np.asarray(ds.get("tau_out_raw", []), dtype=np.float64).reshape(-1)
+    if tau_out.size == q.size:
+        tau_target = tau_out
+    elif tau_cmd.size == q.size:
+        tau_target = tau_cmd
+    elif tau_out_raw.size == q.size:
+        tau_target = tau_out_raw
+    else:
+        raise KeyError("raw log missing usable torque target (tau_out/tau_cmd/tau_out_raw)")
     if q.shape != qd.shape:
         raise ValueError("q/qd shape mismatch")
+
+    # Optional commanded velocity / position
+    qd_cmd = ds.get("cmd_qd", None)
+    if qd_cmd is not None:
+        qd_cmd = np.asarray(qd_cmd, dtype=np.float64).reshape(-1)
+        if qd_cmd.size != q.size:
+            qd_cmd = None
+    q_cmd = ds.get("cmd_q", None)
+    if q_cmd is not None:
+        q_cmd = np.asarray(q_cmd, dtype=np.float64).reshape(-1)
+        if q_cmd.size != q.size:
+            q_cmd = None
 
     H = int(get(cfg, "model.history_len"))
     T = q.shape[0]
     if T < H:
         raise ValueError("trajectory too short for history_len")
 
-    feat_state = state_to_features(q, qd).astype(np.float32)  # [T,3]
-    cols = [feat_state]
+    # Use raw q, qd (no sin/cos)
+    q_f = np.asarray(q, dtype=np.float32).reshape(-1, 1)
+    qd_f = np.asarray(qd, dtype=np.float32).reshape(-1, 1)
+    cols = [q_f, qd_f]
     if qdd is not None and qdd.size == T:
         cols.append(qdd.astype(np.float32).reshape(-1, 1))
     if temp.size == T:
         cols.append(temp.astype(np.float32).reshape(-1, 1))
+    # cmd_qd
+    cols.append((qd_cmd.astype(np.float32).reshape(-1, 1) if qd_cmd is not None else np.zeros((T, 1), dtype=np.float32)))
+    # cmd_q
+    cols.append((q_cmd.astype(np.float32).reshape(-1, 1) if q_cmd is not None else np.zeros((T, 1), dtype=np.float32)))
     feat_full = np.concatenate(cols, axis=-1)  # [T, D]
 
-    # Delta torque target: tau[k+1] - tau[k]
-    delta_tau = (tau_target[1:] - tau_target[:-1]).astype(np.float32)  # [T-1]
-
+    # Direct torque target: predict tau at current step (absolute torque)
     xs = []
     ys = []
-    # window ends at index k (>= H-1) and predicts delta_tau at k (which corresponds to tau[k+1]-tau[k])
-    for k in range(H - 1, T - 1):
+    for k in range(H - 1, T):
         x_win = feat_full[k - (H - 1) : k + 1]  # [H, Din]
-        y_t = delta_tau[k]  # scalar
+        y_t = tau_target[k]  # scalar torque
         xs.append(x_win)
         ys.append(y_t)
 
