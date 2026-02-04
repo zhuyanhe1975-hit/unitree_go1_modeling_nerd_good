@@ -1,0 +1,63 @@
+{
+  "project": {
+    "name": "unitree_go1_modeling_nerd_good_real_csv_closed_loop_smoke_cpu",
+    "seed": 42
+  },
+  "paths": {
+    "asset_mjcf": "assets/goM8010_6.xml",
+    "runs_dir": "/tmp/unitree_go1_modeling_nerd_good_runs",
+    "real_csv": "real_data/coverage_capture_20260204_103129.csv",
+    "real_csv_dataset": "/tmp/unitree_go1_modeling_nerd_good_runs/real_csv_closed_loop_dataset.npz",
+    "real_csv_stats": "/tmp/unitree_go1_modeling_nerd_good_runs/real_csv_closed_loop_stats.npz",
+    "real_csv_model": "/tmp/unitree_go1_modeling_nerd_good_runs/real_csv_closed_loop_model_smoke.pt",
+    "sim_raw_log": "/tmp/unitree_go1_modeling_nerd_good_runs/sim_raw.npz",
+    "sim_dataset": "/tmp/unitree_go1_modeling_nerd_good_runs/sim_dataset.npz",
+    "real_dataset": "/tmp/unitree_go1_modeling_nerd_good_runs/real_dataset.npz",
+    "stats_npz": "/tmp/unitree_go1_modeling_nerd_good_runs/stats.npz",
+    "real_stats_npz": "/tmp/unitree_go1_modeling_nerd_good_runs/real_stats.npz",
+    "sim_model": "/tmp/unitree_go1_modeling_nerd_good_runs/sim_model.pt",
+    "real_model": "/tmp/unitree_go1_modeling_nerd_good_runs/real_model.pt",
+    "real_model_scratch": "/tmp/unitree_go1_modeling_nerd_good_runs/real_model_scratch.pt",
+    "real_log": "/tmp/unitree_go1_modeling_nerd_good_runs/real_log.npz"
+  },
+  "sim": {
+    "device": "cpu",
+    "num_envs": 16,
+    "frame_dt": 0.01,
+    "sim_substeps": 10,
+    "mjcf_override": {
+      "stiffness": 0.0,
+      "damping": 0.01,
+      "armature": 0.000111842,
+      "frictionloss": 0.03,
+      "contact_ke": 10000.0,
+      "contact_kd": 100.0
+    }
+  },
+  "model": {
+    "history_len": 10,
+    "embed_dim": 32,
+    "num_layers": 1,
+    "num_heads": 2
+  },
+  "train": {
+    "batch_size": 4096,
+    "lr": 0.001,
+    "epochs": 5,
+    "finetune_lr": 5e-05,
+    "finetune_epochs": 5
+  },
+  "data": {
+    "prepare": {
+      "val_ratio": 0.1
+    },
+    "real": {
+      "qd_lpf_hz": 30.0
+    }
+  },
+  "real": {
+    "kp": 1.0,
+    "kd": 0.01
+  }
+}
+

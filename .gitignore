@@ -10,6 +10,9 @@ runs/warp_cache/
 runs_smoke/
 runs_*/
 
+# Local real logs / captures (do not push by default)
+real_data/*.csv
+
 # Keep the Unitree SDK build artifacts out of git (rebuildable)
 runs/unitree_sdk_build/
 

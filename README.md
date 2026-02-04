@@ -117,3 +117,31 @@ PYTHONPATH=. python3 scripts/demo_ff_sine.py \
   - `"tau_cmd"`：下发的力矩指令
   - `"tau_out"`：SDK 反馈的力矩（kp/kd=0 时更接近“真实作用力矩”）
 - 如果后续确认 SDK 的 `data.tau` 是电机侧力矩，可把 `data.real.tau_out_scale_to_out=true`，在进入模型前按 `(gear_ratio * efficiency)` 缩放到输出端等效力矩。
+
+## 闭环指令驱动的数字孪生（不使用真机状态作为观测）
+
+你的约束是：数字孪生体部署时的观测只能来自**指令**（以及孪生体自身状态），不能直接读取真机的 `q/qd`。
+因此我们提供了一个“command-conditioned”的管线：用真机日志做监督训练，但推理/评估用 open-loop rollout（只用初始状态 + 指令序列 + 孪生体自身滚动状态）。
+
+并使用 Unitree 底层力矩合成公式在孪生体内部构造“等效施加力矩”：
+
+`tau_cmd_hat = kp*(q_ref - q_hat) + kd*(qd_ref - qd_hat) + tau_ff`
+
+训练数据特征（每步，最小版）：
+
+`[sin(q_hat), cos(q_hat), qd_hat, tau_cmd_hat, dt]`
+
+示例（CPU，输出写到 `/tmp/`）：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/prepare_closed_loop_csv.py --config configs/real_csv_closed_loop_cpu.json
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/train_closed_loop_csv.py --config configs/real_csv_closed_loop_cpu.json
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py --config configs/real_csv_closed_loop_cpu.json --device cpu --stage sine --horizon_steps 300
+```
+
+如果你想先快速验证能跑通，可用更小的 smoke 配置（训练更快）：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/train_closed_loop_csv.py --config configs/real_csv_closed_loop_smoke_cpu.json
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py --config configs/real_csv_closed_loop_smoke_cpu.json --device cpu --stage sine --horizon_steps 300
+```

@@ -97,7 +97,18 @@ def train_model(cfg: Dict[str, Any], dataset_npz: str, out_weights: str) -> None
         if (ep + 1) % max(1, epochs // 10) == 0 or ep == 0:
             print(f"epoch {ep+1}/{epochs} train_mse={tr_loss/max(1,tr_n):.6f} val_mse={va_loss/max(1,va_n):.6f}")
 
-    torch.save({"model": model.state_dict(), "input_dim": x.shape[-1], "output_dim": y.shape[-1]}, out_weights)
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "input_dim": x.shape[-1],
+            "output_dim": y.shape[-1],
+            "embed_dim": int(get(cfg, "model.embed_dim")),
+            "num_layers": int(get(cfg, "model.num_layers")),
+            "num_heads": int(get(cfg, "model.num_heads")),
+            "history_len": int(get(cfg, "model.history_len")),
+        },
+        out_weights,
+    )
 
 
 def finetune_model(cfg: Dict[str, Any], dataset_npz: str, base_weights: str, out_weights: str) -> None:
@@ -140,4 +151,15 @@ def finetune_model(cfg: Dict[str, Any], dataset_npz: str, base_weights: str, out
         if (ep + 1) % max(1, epochs // 5) == 0 or ep == 0:
             print(f"finetune epoch {ep+1}/{epochs} mse={tr_loss/max(1,tr_n):.6f}")
 
-    torch.save({"model": model.state_dict(), "input_dim": ckpt["input_dim"], "output_dim": ckpt["output_dim"]}, out_weights)
+    torch.save(
+        {
+            "model": model.state_dict(),
+            "input_dim": ckpt["input_dim"],
+            "output_dim": ckpt["output_dim"],
+            "embed_dim": int(get(cfg, "model.embed_dim")),
+            "num_layers": int(get(cfg, "model.num_layers")),
+            "num_heads": int(get(cfg, "model.num_heads")),
+            "history_len": int(get(cfg, "model.history_len")),
+        },
+        out_weights,
+    )
