@@ -69,3 +69,7 @@
 - sweep 截止频率：`scripts/sweep_qd_filter_cutoff.sh`
 - 生成 `dq_filt_rad_s` 列：`scripts/add_filtered_speed_column.py`
 
+## 开发过程 `results/` 图片与注解归档
+
+开发过程中在本地 `results/` 目录生成的图片与对应汇总（默认不进 git），已额外归档到：
+- `artifacts/results_archive_20260205/`
