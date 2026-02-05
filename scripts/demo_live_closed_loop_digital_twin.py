@@ -150,6 +150,7 @@ class ClosedLoopTwin:
         H = int(get(model_cfg, "model.history_len"))
         # Prefer the feature schema saved during dataset preparation to avoid mismatches
         # between the current config and the stats/model that are being loaded.
+        has_feature_names_in_npz = "feature_names" in stats_npz
         if "feature_names" in stats_npz:
             raw = stats_npz["feature_names"]
             try:
@@ -162,6 +163,24 @@ class ClosedLoopTwin:
         d_stats = int(stats["x_mean"].shape[0])
         d_feat = int(len(feature_names))
         d_ckpt = int(ckpt["input_dim"])
+
+        # If stats/ckpt agree but the requested feature_set does not, infer the correct schema.
+        # This makes the demo robust when the user points at an older minimal (D=5) model while
+        # the current config requests full (D=9), or vice versa.
+        if (not has_feature_names_in_npz) and (d_stats == d_ckpt) and (d_feat != d_ckpt):
+            inferred_set: Optional[str] = None
+            if d_ckpt == 5:
+                inferred_set = "minimal"
+            elif d_ckpt == 9:
+                inferred_set = "full"
+            if inferred_set is not None:
+                feature_names = _feature_names_for_set(inferred_set)
+                d_feat = int(len(feature_names))
+                print(
+                    f"[demo][warn] feature_set mismatch: requested={feature_set!r} but (stats,weights) imply "
+                    f"{inferred_set!r} (D={d_ckpt}). Using inferred feature_names for the demo."
+                )
+
         if not (d_stats == d_feat == d_ckpt):
             raise SystemExit(
                 "Feature dimension mismatch for live demo:\n"
@@ -170,7 +189,8 @@ class ClosedLoopTwin:
                 f"- feature_names len: {d_feat}\n\n"
                 "This usually means you're mixing a (stats, weights) pair prepared with a different "
                 "`data.real.feature_set` (minimal vs full).\n"
-                "Fix: pass a matching pair via `--weights ... --stats ...`, or re-run "
+                "Fix: pass a matching pair via `--weights ... --stats ...`, or set `--feature_set minimal/full`, "
+                "or re-run "
                 "`scripts/prepare_closed_loop_csv.py` and `scripts/train_closed_loop_csv.py` with a consistent config."
             )
 
