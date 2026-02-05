@@ -84,6 +84,7 @@ conda run -n nerd_py310 PYTHONPATH=. python3 scripts/rollout_compare_neural.py \
 
 - 里程碑文档：`docs/MILESTONE_20260205_closed_loop_digital_twin.md`
 - 完整可复现归档（数据/模型/图/summary）：`milestones/20260205_closed_loop_digital_twin/`
+- Live demo（真机 + 孪生体同步滚动）：`docs/LIVE_DEMO.md`
 
 ## 实机采集前：Unitree SDK Python 模块
 
