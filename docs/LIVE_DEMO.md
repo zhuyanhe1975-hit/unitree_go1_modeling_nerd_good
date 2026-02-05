@@ -32,6 +32,13 @@ conda run -n nerd_py310 PYTHONPATH=. python3 scripts/demo_live_closed_loop_digit
   --plot
 ```
 
+也可以直接用“自动加载最佳模型”的 demo 配置（推荐）：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/demo_live_closed_loop_digital_twin.py \
+  --config configs/live_demo_best_qdfilt_full.json
+```
+
 输出（默认在 `results/`，不会进 git）：
 - `results/live_twin_<tag>_<timestamp>.csv`
 - `results/live_twin_<tag>_<timestamp>.png`（如果加 `--plot` 且装了 matplotlib）

@@ -308,6 +308,12 @@ def _default_out_paths(out_dir: str, tag: str) -> Tuple[str, str]:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Live closed-loop (command-conditioned) digital twin demo (Unitree GO-M8010-6)")
+    ap.add_argument(
+        "--config",
+        default="",
+        help="optional demo config json (fields: hw_config, model_config, weights, stats, device, feature_set, "
+        "duration_s, rate_hz, kp, kd, tau_ff, q_center, amp, freq_hz, plot, dry_run, out_dir, tag)",
+    )
     ap.add_argument("--hw_config", default="config.json", help="hardware config containing real.serial_port/motor_id/unitree_sdk_lib")
     ap.add_argument("--model_config", default="configs/real_csv_closed_loop_gpu.json", help="model config for closed-loop twin")
     ap.add_argument("--weights", default="", help="override weights path (default: paths.real_csv_model from model_config)")
@@ -331,28 +337,58 @@ def main() -> None:
 
     args = ap.parse_args()
 
-    hw_cfg = load_config(str(args.hw_config))
-    model_cfg = load_config(str(args.model_config))
+    demo_cfg: Dict[str, Any] = {}
+    if str(args.config).strip():
+        demo_cfg = load_config(str(args.config))
 
-    weights = str(args.weights).strip() or str(get(model_cfg, "paths.real_csv_model"))
-    stats = str(args.stats).strip() or str(get(model_cfg, "paths.real_csv_stats"))
-    device = str(args.device)
-    feature_set = str(args.feature_set).strip() or str(get(model_cfg, "data.real.feature_set", required=False, default="minimal"))
+    def _pick(key: str, default: Any) -> Any:
+        cli_v = getattr(args, key)
+        # For argparse "store_true", default is False and we want config to be able to set True.
+        if isinstance(cli_v, bool):
+            return cli_v if cli_v else bool(demo_cfg.get(key, default))
+        # For strings: prefer CLI if non-empty.
+        if isinstance(cli_v, str):
+            return cli_v if cli_v.strip() else demo_cfg.get(key, default)
+        # For floats/ints: if CLI equals argparse default, allow config override.
+        return demo_cfg.get(key, cli_v)
 
-    kp = float(args.kp) if np.isfinite(float(args.kp)) else float(get(model_cfg, "real.kp", required=False, default=0.0))
-    kd = float(args.kd) if np.isfinite(float(args.kd)) else float(get(model_cfg, "real.kd", required=False, default=0.0))
-    tau_ff = float(args.tau_ff)
+    hw_config_path = str(_pick("hw_config", "config.json"))
+    model_config_path = str(_pick("model_config", "configs/real_csv_closed_loop_gpu.json"))
 
-    out_csv, out_png = _default_out_paths(str(args.out_dir), str(args.tag))
+    hw_cfg = load_config(hw_config_path)
+    model_cfg = load_config(model_config_path)
 
-    print("[demo] hw_config:", str(args.hw_config))
-    print("[demo] model_config:", str(args.model_config))
+    weights = str(_pick("weights", "")).strip() or str(get(model_cfg, "paths.real_csv_model"))
+    stats = str(_pick("stats", "")).strip() or str(get(model_cfg, "paths.real_csv_stats"))
+    device = str(_pick("device", "cuda"))
+    feature_set = str(_pick("feature_set", "")).strip() or str(
+        get(model_cfg, "data.real.feature_set", required=False, default="minimal")
+    )
+
+    kp_cli = float(getattr(args, "kp"))
+    kd_cli = float(getattr(args, "kd"))
+    kp = float(_pick("kp", kp_cli)) if np.isfinite(kp_cli) else float(demo_cfg.get("kp", get(model_cfg, "real.kp", required=False, default=0.0)))
+    kd = float(_pick("kd", kd_cli)) if np.isfinite(kd_cli) else float(demo_cfg.get("kd", get(model_cfg, "real.kd", required=False, default=0.0)))
+    tau_ff = float(_pick("tau_ff", float(getattr(args, "tau_ff"))))
+
+    out_dir = str(_pick("out_dir", "results"))
+    tag = str(_pick("tag", "sine"))
+    out_csv, out_png = _default_out_paths(out_dir, tag)
+
+    if str(args.config).strip():
+        print("[demo] demo_config:", str(args.config))
+    print("[demo] hw_config:", hw_config_path)
+    print("[demo] model_config:", model_config_path)
     print("[demo] weights:", weights)
     print("[demo] stats:", stats)
     print(f"[demo] device={device} feature_set(requested)={feature_set} kp={kp:g} kd={kd:g} tau_ff={tau_ff:g}")
-    print(f"[demo] duration_s={float(args.duration_s):g} rate_hz={float(args.rate_hz):g} dry_run={bool(args.dry_run)}")
+    duration_s = float(_pick("duration_s", float(getattr(args, "duration_s"))))
+    rate_hz = float(_pick("rate_hz", float(getattr(args, "rate_hz"))))
+    dry_run = bool(_pick("dry_run", bool(getattr(args, "dry_run"))))
+    plot = bool(_pick("plot", bool(getattr(args, "plot"))))
+    print(f"[demo] duration_s={duration_s:g} rate_hz={rate_hz:g} dry_run={dry_run}")
     print(f"[demo] out_csv: {out_csv}")
-    if args.plot:
+    if plot:
         print(f"[demo] out_png: {out_png}")
 
     motor = UnitreeGoM8010_6(hw_cfg)
@@ -372,13 +408,17 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, _on_sigint)
 
-    dt_nom = 1.0 / max(1e-6, float(args.rate_hz))
+    dt_nom = 1.0 / max(1e-6, float(rate_hz))
     t0 = time.time()
     last = t0
 
     # Initial read and twin reset.
     q0, qd0, tau0 = motor.read()
-    qref0, qdref0 = _profile_sine(0.0, q_center=float(args.q_center), amp=float(args.amp), freq_hz=float(args.freq_hz))
+    q_center = float(_pick("q_center", float(getattr(args, "q_center"))))
+    amp = float(_pick("amp", float(getattr(args, "amp"))))
+    freq_hz = float(_pick("freq_hz", float(getattr(args, "freq_hz"))))
+
+    qref0, qdref0 = _profile_sine(0.0, q_center=q_center, amp=amp, freq_hz=freq_hz)
     twin.reset(q0=q0, qd0=qd0, dt0=dt_nom, q_ref0=qref0, qd_ref0=qdref0, kp0=kp, kd0=kd, tau_ff0=tau_ff)
 
     fields = [
@@ -415,16 +455,16 @@ def main() -> None:
     while not stop_flag["stop"]:
         now = time.time()
         t_s = now - t0
-        if t_s >= float(args.duration_s):
+        if t_s >= float(duration_s):
             break
 
         dt = float(np.clip(now - last, 0.0, 0.05))
         last = now
 
         # commands for this tick
-        qref, qdref = _profile_sine(t_s, q_center=float(args.q_center), amp=float(args.amp), freq_hz=float(args.freq_hz))
+        qref, qdref = _profile_sine(t_s, q_center=q_center, amp=amp, freq_hz=freq_hz)
 
-        if not args.dry_run:
+        if not dry_run:
             motor.send_pd(q_des=qref, dq_des=qdref, kp=kp, kd=kd, tau_ff=tau_ff)
         q, qd, tau = motor.read()
 
@@ -477,7 +517,7 @@ def main() -> None:
             w.writerow(r)
     print(f"saved: {out_csv} ({len(rows)} rows)")
 
-    if args.plot:
+    if plot:
         try:
             import matplotlib.pyplot as plt
 

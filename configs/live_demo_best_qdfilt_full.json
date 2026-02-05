@@ -1,0 +1,22 @@
+{
+  "demo_name": "live_demo_best_qdfilt_full",
+  "hw_config": "config.json",
+  "model_config": "configs/real_csv_closed_loop_gpu.json",
+  "weights": "milestones/20260205_closed_loop_digital_twin/artifacts/qdfilt_full/real_csv_closed_loop_model_gpu_qdfilt_20260205_104512.pt",
+  "stats": "milestones/20260205_closed_loop_digital_twin/artifacts/qdfilt_full/real_csv_closed_loop_stats_qdfilt_20260205_104512.npz",
+  "device": "cuda",
+  "feature_set": "full",
+  "dry_run": true,
+  "plot": true,
+  "out_dir": "results",
+  "tag": "sine_best_qdfilt_full",
+  "duration_s": 20.0,
+  "rate_hz": 200.0,
+  "kp": 1.0,
+  "kd": 0.01,
+  "tau_ff": 0.0,
+  "q_center": 1.0,
+  "amp": 0.2,
+  "freq_hz": 0.1
+}
+
