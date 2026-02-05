@@ -1,6 +1,8 @@
-# nerd_1dof_goM8010_6
+# unitree_go1_modeling_nerd_good
 
-单关节真实动力学建模（Unitree GO-M8010-6），目标是学习/辨识一个可用于预测的关节动力学模型（不包含补偿器相关内容）。
+单关节数字孪生建模（Unitree GO-M8010-6）。目标是学习/辨识一个**可用于长期 open-loop rollout** 的关节动力学预测器：
+- 输入：当前关节状态 + 施加力矩（或由指令在孪生体内部合成的等效施加力矩）
+- 输出：未来关节状态（例如 `q, qd`）
 
 ## 参考实现：Neural Robot Dynamics (NeRD)
 
@@ -14,10 +16,14 @@
 ## 目录结构（精简版）
 
 - `config.json`：全局唯一参数入口（仿真/训练/实机采集/路径）。
+- `configs/`：可复现实验配置（CPU/GPU、smoke、real CSV 闭环等）。
 - `scripts/`：所有 CLI 脚本（仿真采集、real 采集、训练/finetune、评估、对比等）。
 - `pipeline/`：数据准备、模型定义、训练调度等可复用模块。
 - `assets/`：单关节 MJCF（包含摩擦/回差等结构）。
 - `custom_envs/joint_1dof_env.py`：Warp 单关节环境（用于 sim rollout）。
+- `docs/`：项目文档与里程碑说明。
+- `milestones/`：可追溯归档（数据/模型/图/summary，**会进 git**）。
+- `results/`：本地运行输出（大文件，默认 gitignore）。
 
 原工程的完整功能可参考：`/home/yhzhu/myWorks/nerd_1dof`。
 
@@ -74,26 +80,10 @@ conda run -n nerd_py310 PYTHONPATH=. python3 scripts/rollout_compare_neural.py \
 - `runs/rollout_compare_neural.npz`
 - `runs/rollout_compare_neural.png`（若装了 matplotlib）
 
-## Milestone: Torque-Delta Feedforward Compensation (2026-02-04)
+## Milestone (2026-02-05): 闭环指令驱动的数字孪生（command-conditioned）
 
-在位置闭环模式下（给定 `q_ref/dq_ref/kp/kd`），我们验证了一个可重复的阶段性成果：
-使用 **torque-delta 一步预测**构造前馈力矩，可显著降低正弦轨迹跟踪误差，尤其在低速换向/低频场景更明显。
-
-- 说明文档：`docs/MILESTONE_20260204_torque_delta_ff.md`
-- 关键 demo：`scripts/demo_ff_sine.py`（baseline vs feedforward 对比）
-- torque-delta 管线：`inverse_torque/`（prepare/train/eval）
-
-快速跑硬件 demo（示例）：
-
-```bash
-PYTHONPATH=. python3 scripts/demo_ff_sine.py \
-  --mode both \
-  --ff_type torque_delta \
-  --amp 0.2 --freq 0.1 --duration 20 \
-  --kp 1 --kd 0.01 \
-  --tau_ff_limit 0.15 --tau_ff_scale 1 \
-  --ff_update_div 1
-```
+- 里程碑文档：`docs/MILESTONE_20260205_closed_loop_digital_twin.md`
+- 完整可复现归档（数据/模型/图/summary）：`milestones/20260205_closed_loop_digital_twin/`
 
 ## 实机采集前：Unitree SDK Python 模块
 
@@ -135,7 +125,7 @@ PYTHONPATH=. python3 scripts/demo_ff_sine.py \
 
 `[sin(q_hat), cos(q_hat), qd_hat, e_q, e_qd, kp, kd, tau_cmd_hat, dt]`
 
-示例（CPU，输出写到 `/tmp/`）：
+示例（CPU）：
 
 ```bash
 conda run -n nerd_py310 PYTHONPATH=. python3 scripts/prepare_closed_loop_csv.py --config configs/real_csv_closed_loop_cpu.json
@@ -150,7 +140,7 @@ conda run -n nerd_py310 PYTHONPATH=. python3 scripts/train_closed_loop_csv.py --
 conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py --config configs/real_csv_closed_loop_smoke_cpu.json --device cpu --stage sine --horizon_steps 300
 ```
 
-批量评估多个 stage 并输出 markdown 汇总（保存到 `/tmp/.../summary_closed_loop_csv_*.md`）：
+批量评估多个 stage 并输出 markdown 汇总（默认保存到 `results/summary_closed_loop_csv_*.md`）：
 
 ```bash
 conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py \
