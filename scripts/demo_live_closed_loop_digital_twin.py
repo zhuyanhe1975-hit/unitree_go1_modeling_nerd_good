@@ -344,7 +344,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Live closed-loop (command-conditioned) digital twin demo (Unitree GO-M8010-6)")
     ap.add_argument(
         "--config",
-        default="",
+        default="configs/live_demo_best_qdfilt_full.json",
         help="optional demo config json (fields: hw_config, model_config, weights, stats, device, feature_set, "
         "duration_s, rate_hz, kp, kd, tau_ff, q_center, amp, freq_hz, plot, dry_run, out_dir, tag)",
     )
