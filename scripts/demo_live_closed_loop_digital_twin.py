@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+# Allow running this script via `python scripts/...py` without requiring `PYTHONPATH=.`.
+import os
+import sys
+
+_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 import argparse
 import csv
-import os
 import signal
-import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
