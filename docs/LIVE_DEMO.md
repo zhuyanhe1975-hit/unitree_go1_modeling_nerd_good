@@ -16,6 +16,8 @@
   - 权重 `paths.real_csv_model`（例如 `results/real_csv_closed_loop_model_gpu_qdfilt_*.pt`）
   - 统计量 `paths.real_csv_stats`（例如 `results/real_csv_closed_loop_stats_qdfilt_*.npz`）
 
+注意：`weights` 与 `stats` 必须来自**同一次**数据准备/训练（特征维度必须一致）。如果出现维度不匹配报错，请在命令行显式传入配套的 `--weights` 与 `--stats`。
+
 ## 运行（示例）
 
 在仓库根目录：
@@ -42,4 +44,3 @@ conda run -n nerd_py310 PYTHONPATH=. python3 scripts/demo_live_closed_loop_digit
 ```bash
 conda run -n nerd_py310 PYTHONPATH=. python3 scripts/demo_live_closed_loop_digital_twin.py --dry_run --plot
 ```
-

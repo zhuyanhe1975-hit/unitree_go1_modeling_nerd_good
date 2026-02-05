@@ -148,7 +148,31 @@ class ClosedLoopTwin:
         model.eval()
 
         H = int(get(model_cfg, "model.history_len"))
-        feature_names = _feature_names_for_set(feature_set)
+        # Prefer the feature schema saved during dataset preparation to avoid mismatches
+        # between the current config and the stats/model that are being loaded.
+        if "feature_names" in stats_npz:
+            raw = stats_npz["feature_names"]
+            try:
+                feature_names = [str(x) for x in list(raw.tolist())]
+            except Exception:
+                feature_names = [str(x) for x in list(raw)]
+        else:
+            feature_names = _feature_names_for_set(feature_set)
+
+        d_stats = int(stats["x_mean"].shape[0])
+        d_feat = int(len(feature_names))
+        d_ckpt = int(ckpt["input_dim"])
+        if not (d_stats == d_feat == d_ckpt):
+            raise SystemExit(
+                "Feature dimension mismatch for live demo:\n"
+                f"- stats x_mean dim: {d_stats}\n"
+                f"- checkpoint input_dim: {d_ckpt}\n"
+                f"- feature_names len: {d_feat}\n\n"
+                "This usually means you're mixing a (stats, weights) pair prepared with a different "
+                "`data.real.feature_set` (minimal vs full).\n"
+                "Fix: pass a matching pair via `--weights ... --stats ...`, or re-run "
+                "`scripts/prepare_closed_loop_csv.py` and `scripts/train_closed_loop_csv.py` with a consistent config."
+            )
 
         def _zeros() -> np.ndarray:
             return np.zeros((H,), dtype=np.float64)
@@ -305,7 +329,7 @@ def main() -> None:
     print("[demo] model_config:", str(args.model_config))
     print("[demo] weights:", weights)
     print("[demo] stats:", stats)
-    print(f"[demo] device={device} feature_set={feature_set} kp={kp:g} kd={kd:g} tau_ff={tau_ff:g}")
+    print(f"[demo] device={device} feature_set(requested)={feature_set} kp={kp:g} kd={kd:g} tau_ff={tau_ff:g}")
     print(f"[demo] duration_s={float(args.duration_s):g} rate_hz={float(args.rate_hz):g} dry_run={bool(args.dry_run)}")
     print(f"[demo] out_csv: {out_csv}")
     if args.plot:
@@ -319,6 +343,7 @@ def main() -> None:
         device=device,
         feature_set=feature_set,
     )
+    print(f"[demo] feature_names(loaded)={twin.feature_names} (D={len(twin.feature_names)})")
 
     stop_flag = {"stop": False}
 
@@ -483,4 +508,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
