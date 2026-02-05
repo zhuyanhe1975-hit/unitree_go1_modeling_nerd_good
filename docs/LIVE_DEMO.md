@@ -39,6 +39,8 @@ conda run -n nerd_py310 PYTHONPATH=. python3 scripts/demo_live_closed_loop_digit
   --config configs/live_demo_best_qdfilt_full.json
 ```
 
+为避免启动瞬间的指令位置跳跃，demo 默认会在前 `ramp_s` 秒内平滑地从当前 `q0` 过渡到 `q_center + amp*cos(wt)`。
+
 输出（默认在 `results/`，不会进 git）：
 - `results/live_twin_<tag>_<timestamp>.csv`
 - `results/live_twin_<tag>_<timestamp>.png`（如果加 `--plot` 且装了 matplotlib）

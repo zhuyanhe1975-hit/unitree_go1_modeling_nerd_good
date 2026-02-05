@@ -6,7 +6,7 @@
   "stats": "milestones/20260205_closed_loop_digital_twin/artifacts/qdfilt_full/real_csv_closed_loop_stats_qdfilt_20260205_104512.npz",
   "device": "cuda",
   "feature_set": "full",
-  "dry_run": true,
+  "dry_run": false,
   "plot": true,
   "out_dir": "results",
   "tag": "sine_best_qdfilt_full",
@@ -17,6 +17,6 @@
   "tau_ff": 0.0,
   "q_center": 1.0,
   "amp": 0.2,
-  "freq_hz": 0.1
+  "freq_hz": 0.1,
+  "ramp_s": 1.0
 }
-

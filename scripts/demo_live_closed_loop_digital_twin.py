@@ -298,10 +298,38 @@ class ClosedLoopTwin:
         return self.q_hat, self.qd_hat, tau_cmd_hat
 
 
-def _profile_sine(t: float, *, q_center: float, amp: float, freq_hz: float) -> Tuple[float, float]:
+def _profile_sine(t: float, *, q0: float, q_center: float, amp: float, freq_hz: float, ramp_s: float) -> Tuple[float, float]:
+    """
+    Sine reference with a smooth start to avoid an initial position jump.
+
+    During the first `ramp_s` seconds we smoothly blend from a hold at q0 to a sine around q_center:
+      q_ref(t) = q_center + a(t)*cos(w t) + b(t)
+      a(t) = amp * s(t)
+      b(t) = (q0 - q_center) * (1 - s(t))
+      s(t) = 0.5*(1 - cos(pi*u)), u=clamp(t/ramp_s,0,1)
+
+    This ensures:
+      - at t=0: q_ref=q0 and qd_ref=0
+      - after ramp: q_ref=q_center + amp*cos(wt), qd_ref=-amp*w*sin(wt)
+    """
     w = 2.0 * np.pi * float(freq_hz)
-    q_ref = float(q_center + amp * np.cos(w * t))
-    qd_ref = float(-amp * w * np.sin(w * t))
+    if ramp_s <= 1e-9:
+        s = 1.0
+        ds = 0.0
+    else:
+        u = float(np.clip(t / float(ramp_s), 0.0, 1.0))
+        s = 0.5 * (1.0 - float(np.cos(np.pi * u)))
+        ds = (0.5 * np.pi / float(ramp_s) * float(np.sin(np.pi * u))) if u < 1.0 else 0.0
+
+    a = float(amp) * s
+    da = float(amp) * ds
+    b = (float(q0) - float(q_center)) * (1.0 - s)
+    db = (float(q0) - float(q_center)) * (-ds)
+
+    c = float(np.cos(w * t))
+    sn = float(np.sin(w * t))
+    q_ref = float(q_center + a * c + b)
+    qd_ref = float(da * c + a * (-w * sn) + db)
     return q_ref, qd_ref
 
 
@@ -339,6 +367,7 @@ def main() -> None:
     ap.add_argument("--q_center", type=float, default=1.0, help="sine center position (rad)")
     ap.add_argument("--amp", type=float, default=0.2, help="sine amplitude (rad)")
     ap.add_argument("--freq_hz", type=float, default=0.1, help="sine frequency (Hz)")
+    ap.add_argument("--ramp_s", type=float, default=1.0, help="smoothly blend from q0 to sine over this duration (s)")
     ap.add_argument("--plot", action="store_true", help="save a png plot (requires matplotlib)")
 
     args = ap.parse_args()
@@ -423,8 +452,9 @@ def main() -> None:
     q_center = float(_pick("q_center", float(getattr(args, "q_center"))))
     amp = float(_pick("amp", float(getattr(args, "amp"))))
     freq_hz = float(_pick("freq_hz", float(getattr(args, "freq_hz"))))
+    ramp_s = float(_pick("ramp_s", float(getattr(args, "ramp_s"))))
 
-    qref0, qdref0 = _profile_sine(0.0, q_center=q_center, amp=amp, freq_hz=freq_hz)
+    qref0, qdref0 = _profile_sine(0.0, q0=float(q0), q_center=q_center, amp=amp, freq_hz=freq_hz, ramp_s=ramp_s)
     twin.reset(q0=q0, qd0=qd0, dt0=dt_nom, q_ref0=qref0, qd_ref0=qdref0, kp0=kp, kd0=kd, tau_ff0=tau_ff)
 
     fields = [
@@ -450,11 +480,11 @@ def main() -> None:
     rows: List[Dict[str, float | str]] = []
     print("[demo] running... (Ctrl-C to stop)")
 
-    # Optional: hold the motor at start for a short settle time.
+    # Optional: hold the motor at start for a short settle time (avoid jumping to q_center).
     settle_s = 0.3
     while time.time() - t0 < settle_s and not stop_flag["stop"]:
-        qref, qdref = _profile_sine(0.0, q_center=float(args.q_center), amp=0.0, freq_hz=float(args.freq_hz))
-        if not args.dry_run:
+        qref, qdref = float(q0), 0.0
+        if not dry_run:
             motor.send_pd(q_des=qref, dq_des=qdref, kp=kp, kd=kd, tau_ff=tau_ff)
         time.sleep(dt_nom)
 
@@ -468,7 +498,7 @@ def main() -> None:
         last = now
 
         # commands for this tick
-        qref, qdref = _profile_sine(t_s, q_center=q_center, amp=amp, freq_hz=freq_hz)
+        qref, qdref = _profile_sine(t_s, q0=float(q0), q_center=q_center, amp=amp, freq_hz=freq_hz, ramp_s=ramp_s)
 
         if not dry_run:
             motor.send_pd(q_des=qref, dq_des=qdref, kp=kp, kd=kd, tau_ff=tau_ff)
