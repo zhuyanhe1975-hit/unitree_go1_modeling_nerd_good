@@ -14,6 +14,7 @@ runs_*/
 real_data/*.csv
 
 # Generated results (large artifacts)
+results/
 results/*.npz
 results/*.pt
 results/*.png

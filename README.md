@@ -131,6 +131,10 @@ PYTHONPATH=. python3 scripts/demo_ff_sine.py \
 
 `[sin(q_hat), cos(q_hat), qd_hat, tau_cmd_hat, dt]`
 
+如果你要更好地学习摩擦/死区/滞回，推荐使用更丰富的特征集（`data.real.feature_set="full"`）：
+
+`[sin(q_hat), cos(q_hat), qd_hat, e_q, e_qd, kp, kd, tau_cmd_hat, dt]`
+
 示例（CPU，输出写到 `/tmp/`）：
 
 ```bash
@@ -183,3 +187,47 @@ conda run -n nerd_py310 PYTHONPATH=. python3 scripts/eval_closed_loop_csv.py \
   --plot_full_cycle \
   --plot_horizon_steps 4000
 ```
+
+### 用 CSV 内的滤波速度列作为训练/评估基准（不覆盖原始速度）
+
+如果你希望“训练阶段完全以 CSV 中的 `dq_filt_rad_s` 为准”，推荐做法是：
+
+1) 先从原始 CSV 生成一个带新列的副本（不修改原文件）：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/add_filtered_speed_column.py \
+  --config configs/real_csv_closed_loop_gpu.json \
+  --csv real_data/coverage_capture_20260204_103129.csv \
+  --method zero_phase_one_pole \
+  --cutoff_hz 20
+```
+
+2) 训练/评估时指定 `--csv` 和 `--qd_col dq_filt_rad_s`，并关闭脚本内部的二次滤波（避免 double filter）：
+
+```bash
+conda run -n nerd_py310 PYTHONPATH=. python3 scripts/prepare_closed_loop_csv.py \
+  --config configs/real_csv_closed_loop_gpu.json \
+  --csv results/coverage_capture_20260204_103129_with_qd_filt.csv \
+  --qd_col dq_filt_rad_s \
+  --qd_filter_hz 0 \
+  --qd_use_raw
+```
+
+评估时同样带上 `--csv/--qd_col`，图里会同时画出 `qd_gt_raw`（若 CSV 里有 `dq_rad_s`）和 `qd_gt`（你指定的列）。
+
+### 训练建议：用验证集最优 checkpoint（避免 open-loop 变差）
+
+闭环建模里常见现象是：训练到很低的 `train_mse` / 一步 teacher-forcing 很准，但 **open-loop rollout 反而变差**（过拟合 + 分布漂移）。
+
+默认 `pipeline/train.py` 会把 **验证集 `val_mse` 最低**的模型保存到 `paths.real_csv_model`（可在 config 里用 `train.save_best` / `train.early_stop.*` 控制）。
+
+如果你更关心长期开环（open-loop）效果（推荐），可以开启训练期的 open-loop 验证并以此选 best：
+
+- config:
+  - `train.open_loop_val.enabled=true`
+  - `train.open_loop_val.stage="sine"`
+  - `train.open_loop_val.horizon_steps=300`
+  - `train.open_loop_val.every=20`
+  - `train.open_loop_val.csv=...`（例如带 `dq_filt_rad_s` 的 CSV）
+
+此时训练会打印 `open_loop_qd_rmse` 并按它保存 best checkpoint。

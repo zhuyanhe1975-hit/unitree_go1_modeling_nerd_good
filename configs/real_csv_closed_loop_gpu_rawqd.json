@@ -1,0 +1,73 @@
+{
+  "project": {
+    "name": "unitree_go1_modeling_nerd_good_real_csv_closed_loop_gpu_rawqd",
+    "seed": 42
+  },
+  "paths": {
+    "asset_mjcf": "assets/goM8010_6.xml",
+    "runs_dir": "results",
+    "real_csv": "real_data/coverage_capture_20260204_103129.csv",
+    "real_csv_dataset": "results/real_csv_closed_loop_dataset_rawqd.npz",
+    "real_csv_stats": "results/real_csv_closed_loop_stats_rawqd.npz",
+    "real_csv_model": "results/real_csv_closed_loop_model_gpu_rawqd.pt"
+  },
+  "sim": {
+    "device": "cuda",
+    "num_envs": 16,
+    "frame_dt": 0.01,
+    "sim_substeps": 10,
+    "mjcf_override": {
+      "stiffness": 0.0,
+      "damping": 0.01,
+      "armature": 0.000111842,
+      "frictionloss": 0.03,
+      "contact_ke": 10000.0,
+      "contact_kd": 100.0
+    }
+  },
+  "model": {
+    "history_len": 10,
+    "embed_dim": 128,
+    "num_layers": 3,
+    "num_heads": 8
+  },
+  "train": {
+    "batch_size": 4096,
+    "lr": 0.001,
+    "epochs": 500,
+    "save_best": true,
+    "save_last": false,
+    "early_stop": {
+      "patience": 50,
+      "min_delta": 0.0
+    },
+    "open_loop_val": {
+      "enabled": true,
+      "stage": "sine",
+      "horizon_steps": 300,
+      "every": 20,
+      "csv": "real_data/coverage_capture_20260204_103129.csv"
+    },
+    "finetune_lr": 5e-05,
+    "finetune_epochs": 20
+  },
+  "data": {
+    "prepare": {
+      "val_ratio": 0.1
+    },
+    "real": {
+      "qd_col": "dq_rad_s",
+      "feature_set": "full",
+      "qd_filter": {
+        "method": "zero_phase_one_pole",
+        "cutoff_hz": 0.0
+      },
+      "qd_use_filtered": false,
+      "use_tau_ff_from_csv": false
+    }
+  },
+  "real": {
+    "kp": 1.0,
+    "kd": 0.01
+  }
+}

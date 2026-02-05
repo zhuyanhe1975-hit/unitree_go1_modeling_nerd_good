@@ -12,6 +12,13 @@ import torch
 
 from pipeline.config import load_cfg
 from pipeline.model import CausalTransformer
+from pipeline.prepare_closed_loop import (
+    _build_features,
+    _feature_names_for_set,
+    _get_qd_filter_cfg,
+    _one_pole_lpf,
+    _zero_phase_one_pole_lpf,
+)
 from project_config import ensure_dir, get
 
 
@@ -84,6 +91,9 @@ def _open_loop_segment(
     x_std = stats["x_std"]
     y_mean = stats["y_mean"]
     y_std = stats["y_std"]
+    feature_names = list(stats.get("feature_names", []))
+    if not feature_names:
+        feature_names = ["sin_q", "cos_q", "qd", "tau_cmd_hat", "dt"]
 
     q_hist = q[a : a + H].astype(np.float64).copy()
     qd_hist = qd[a : a + H].astype(np.float64).copy()
@@ -110,8 +120,17 @@ def _open_loop_segment(
             dt_h[0] = float(np.median(np.diff(tt)))
             dt_h[1:] = np.diff(tt)
 
-        tau_cmd_hat = kp_h * (qref_h - q_hist) + kd_h * (qdref_h - qd_hist) + tau_ff_h
-        feat = np.stack([np.sin(q_hist), np.cos(q_hist), qd_hist, tau_cmd_hat, dt_h], axis=-1).astype(np.float32)
+        feat = _build_features(
+            q=q_hist,
+            qd=qd_hist,
+            q_ref=qref_h,
+            qd_ref=qdref_h,
+            kp=kp_h,
+            kd=kd_h,
+            tau_ff=tau_ff_h,
+            dt=dt_h,
+            feature_names=feature_names,
+        )
         x_buf[0] = (feat - x_mean[None, None, :]) / x_std[None, None, :]
 
         pred_n = model(torch.from_numpy(x_buf).to(device)).detach().cpu().numpy().reshape(-1).astype(np.float32)
@@ -167,6 +186,9 @@ def _open_loop_rollout_trace(
     x_std = stats["x_std"]
     y_mean = stats["y_mean"]
     y_std = stats["y_std"]
+    feature_names = list(stats.get("feature_names", []))
+    if not feature_names:
+        feature_names = ["sin_q", "cos_q", "qd", "tau_cmd_hat", "dt"]
 
     k0 = a + (H - 1)
     k1 = k0 + int(horizon_steps)
@@ -210,7 +232,17 @@ def _open_loop_rollout_trace(
         tau_cmd_h = kp_h * (qref_h - q_hist) + kd_h * (qdref_h - qd_hist) + tau_ff_h
         tau_cmd_hat[i] = float(tau_cmd_h[-1])
 
-        feat = np.stack([np.sin(q_hist), np.cos(q_hist), qd_hist, tau_cmd_h, dt_h], axis=-1).astype(np.float32)
+        feat = _build_features(
+            q=q_hist,
+            qd=qd_hist,
+            q_ref=qref_h,
+            qd_ref=qdref_h,
+            kp=kp_h,
+            kd=kd_h,
+            tau_ff=tau_ff_h,
+            dt=dt_h,
+            feature_names=feature_names,
+        )
         x_buf[0] = (feat - x_mean[None, None, :]) / x_std[None, None, :]
 
         pred_n = model(torch.from_numpy(x_buf).to(device)).detach().cpu().numpy().reshape(-1).astype(np.float32)
@@ -270,6 +302,7 @@ def _plot_reversal_windows(
     t = trace["t"]
     q_gt = trace["q_gt"]
     qd_gt = trace["qd_gt"]
+    qd_gt_raw = trace.get("qd_gt_raw", None)
     q_hat = trace["q_hat"]
     qd_hat = trace["qd_hat"]
     q_ref = trace["q_ref"]
@@ -305,7 +338,9 @@ def _plot_reversal_windows(
         axq.set_title(f"reversal #{i+1} (t=0 at qd_ref sign-change)")
 
         axd.plot(tt, qd_ref[a : b + 1], label="qd_ref", color="tab:gray", lw=1.0, alpha=0.8)
-        axd.plot(tt, qd_gt[a : b + 1], label="qd_gt", color="k", lw=1.2, alpha=0.8)
+        if qd_gt_raw is not None:
+            axd.plot(tt, qd_gt_raw[a : b + 1], label="qd_gt_raw", color="0.7", lw=0.8, alpha=0.7)
+        axd.plot(tt, qd_gt[a : b + 1], label="qd_gt", color="k", lw=1.2, alpha=0.85)
         axd.plot(tt, qd_hat[a : b + 1], label="qd_hat (open-loop)", color="tab:red", lw=1.2)
         axd.axvline(0.0, color="tab:blue", lw=0.8, alpha=0.6)
         axd.grid(True, alpha=0.25)
@@ -353,6 +388,7 @@ def _plot_full_cycle(trace: dict, *, out_png: str) -> None:
     t = trace["t"]
     q_gt = trace["q_gt"]
     qd_gt = trace["qd_gt"]
+    qd_gt_raw = trace.get("qd_gt_raw", None)
     q_hat = trace["q_hat"]
     qd_hat = trace["qd_hat"]
     q_ref = trace["q_ref"]
@@ -377,7 +413,9 @@ def _plot_full_cycle(trace: dict, *, out_png: str) -> None:
 
     ax2 = plt.subplot(3, 1, 2, sharex=ax1)
     ax2.plot(tt, qd_ref[sl], label="qd_ref", color="tab:gray", lw=1.0, alpha=0.8)
-    ax2.plot(tt, qd_gt[sl], label="qd_gt", color="k", lw=1.2, alpha=0.8)
+    if qd_gt_raw is not None:
+        ax2.plot(tt, qd_gt_raw[sl], label="qd_gt_raw", color="0.7", lw=0.8, alpha=0.7)
+    ax2.plot(tt, qd_gt[sl], label="qd_gt", color="k", lw=1.2, alpha=0.85)
     ax2.plot(tt, qd_hat[sl], label="qd_hat (open-loop)", color="tab:red", lw=1.2)
     ax2.grid(True, alpha=0.25)
     ax2.set_ylabel("qd (rad/s)")
@@ -480,6 +518,17 @@ def main() -> None:
     ap.add_argument("--horizon_steps", type=int, default=300)
     ap.add_argument("--baseline", action="store_true", help="also compute a simple open-loop baseline")
     ap.add_argument("--out_md", default="", help="write a markdown summary to this path (default: <runs_dir>/summary_*.md)")
+    ap.add_argument(
+        "--use_tau_ff_from_csv",
+        action="store_true",
+        help="use feedforward torque from CSV (otherwise tau_ff=0). Use only if tau_ff was actually commanded.",
+    )
+    ap.add_argument("--qd_col", default="", help="qd column name in CSV (default: data.real.qd_col or dq_rad_s)")
+    ap.add_argument("--qd_filter_method", default="", help="one_pole or zero_phase_one_pole (override config)")
+    ap.add_argument("--qd_filter_hz", type=float, default=float("nan"), help="qd filter cutoff Hz (override config)")
+    qd_src = ap.add_mutually_exclusive_group()
+    qd_src.add_argument("--qd_use_filtered", action="store_true", help="use filtered qd as ground-truth (override config)")
+    qd_src.add_argument("--qd_use_raw", action="store_true", help="use raw qd as ground-truth (override config)")
     ap.add_argument("--plot_reversals", action="store_true", help="save a plot focused on low-speed reversal windows")
     ap.add_argument("--plot_horizon_steps", type=int, default=0, help="override horizon for plotting trace (default: --horizon_steps)")
     ap.add_argument("--reversal_window_s", type=float, default=0.5, help="half-window size around reversal (seconds)")
@@ -496,6 +545,17 @@ def main() -> None:
     args = ap.parse_args()
 
     cfg: Dict[str, Any] = load_cfg(args.config)
+
+    # Optional overrides (mutate cfg in-memory)
+    if str(args.qd_filter_method).strip() or np.isfinite(float(args.qd_filter_hz)):
+        cfg.setdefault("data", {}).setdefault("real", {}).setdefault("qd_filter", {})
+        if str(args.qd_filter_method).strip():
+            cfg["data"]["real"]["qd_filter"]["method"] = str(args.qd_filter_method).strip()
+        if np.isfinite(float(args.qd_filter_hz)):
+            cfg["data"]["real"]["qd_filter"]["cutoff_hz"] = float(args.qd_filter_hz)
+    if bool(args.qd_use_filtered) or bool(args.qd_use_raw):
+        cfg.setdefault("data", {}).setdefault("real", {})
+        cfg["data"]["real"]["qd_use_filtered"] = bool(args.qd_use_filtered)
 
     runs_dir = str(get(cfg, "paths.runs_dir"))
     ensure_dir(runs_dir)
@@ -525,6 +585,8 @@ def main() -> None:
 
     ds = dict(np.load(dataset_npz, allow_pickle=True))
     stats = {k: ds[k].astype(np.float32) for k in ["x_mean", "x_std", "y_mean", "y_std"]}
+    if "feature_names" in ds:
+        stats["feature_names"] = list(ds["feature_names"].tolist())
     H = int(ds["x"].shape[1])
 
     model, _ = _load_model(cfg, weights_path, device=str(args.device))
@@ -554,10 +616,42 @@ def main() -> None:
     t = np.array([float(r["t_s"]) for r in rows], dtype=np.float64)
     stage = np.array([r["stage"] for r in rows], dtype=object)
     q = np.array([float(r["q_rad"]) for r in rows], dtype=np.float64)
-    qd = np.array([float(r["dq_rad_s"]) for r in rows], dtype=np.float64)
-    tau_ff = np.array([float(r["tau_Nm"]) for r in rows], dtype=np.float64)
+    qd_col = str(args.qd_col).strip() or str(get(cfg, "data.real.qd_col", required=False, default="dq_rad_s"))
+    if qd_col not in rows[0]:
+        raise SystemExit(f"missing qd_col: {qd_col} (available: {list(rows[0].keys())})")
+    qd_col_data = np.array([float(r[qd_col]) for r in rows], dtype=np.float64)
+    qd_raw = np.array([float(r["dq_rad_s"]) for r in rows], dtype=np.float64) if "dq_rad_s" in rows[0] else qd_col_data
+    use_tau_ff_from_csv = bool(
+        args.use_tau_ff_from_csv or get(cfg, "data.real.use_tau_ff_from_csv", required=False, default=False)
+    )
+    if use_tau_ff_from_csv:
+        tau_key = None
+        for k in ["tau_ff_Nm", "tau_ff", "tau_Nm"]:
+            if k in rows[0]:
+                tau_key = k
+                break
+        if tau_key is None:
+            raise SystemExit("no tau_ff column found (expected one of: tau_ff_Nm, tau_ff, tau_Nm)")
+        tau_ff = np.array([float(r[tau_key]) for r in rows], dtype=np.float64)
+    else:
+        tau_ff = np.zeros((len(rows),), dtype=np.float64)
     q_ref = np.array([float(r["q_ref_rad"]) for r in rows], dtype=np.float64)
     qd_ref = np.array([float(r["dq_ref_rad_s"]) for r in rows], dtype=np.float64)
+
+    # Apply the same qd filtering policy used for dataset prep (but keep CSV dq_rad_s for plotting if present).
+    dt_med = float(np.median(np.diff(t))) if len(t) >= 2 else 0.0
+    qd_method, qd_cutoff_hz, qd_use_filtered = _get_qd_filter_cfg(cfg)
+    qd_base = qd_col_data
+    qd_filt = qd_base
+    if float(qd_cutoff_hz) > 0 and dt_med > 0:
+        if qd_method == "zero_phase_one_pole":
+            qd_filt = _zero_phase_one_pole_lpf(qd_base, dt=dt_med, cutoff_hz=float(qd_cutoff_hz))
+        elif qd_method == "one_pole":
+            qd_filt = _one_pole_lpf(qd_base, dt=dt_med, cutoff_hz=float(qd_cutoff_hz))
+        else:
+            raise SystemExit(f"unknown qd filter method: {qd_method!r}")
+    qd = qd_filt if bool(qd_use_filtered) else qd_base
+    qd_filter_delta_rmse = float(np.sqrt(np.mean((qd - qd_raw) ** 2))) if len(qd_raw) else 0.0
 
     if "kp" in rows[0]:
         kp = np.array([float(r["kp"]) for r in rows], dtype=np.float64)
@@ -622,6 +716,9 @@ def main() -> None:
         md.append(f"- stages: `{', '.join(stages)}`")
         md.append(f"- horizon_steps: `{int(args.horizon_steps)}`")
         md.append(f"- device: `{args.device}`")
+        md.append(f"- qd_col: `{qd_col}` (raw plot uses `dq_rad_s` if present)")
+        md.append(f"- qd_filter: `{qd_method}` @ `{float(qd_cutoff_hz)}` Hz, use_filtered=`{bool(qd_use_filtered)}`")
+        md.append(f"- qd_filter_delta_rmse(raw->filt): `{qd_filter_delta_rmse:.6g}` rad/s")
         md.append("")
         md.append(_to_md_table(rows_model, title="Model (open-loop)"))
         if rows_base:
@@ -650,6 +747,7 @@ def main() -> None:
             horizon_steps=int(plot_h),
             device=str(args.device),
         )
+        trace["qd_gt_raw"] = qd_raw[trace["k0"] : trace["k0"] + int(plot_h) + 1].astype(np.float64).copy()
         if args.out_png:
             out_png = str(args.out_png)
         else:
@@ -684,6 +782,7 @@ def main() -> None:
             horizon_steps=int(plot_h),
             device=str(args.device),
         )
+        trace["qd_gt_raw"] = qd_raw[trace["k0"] : trace["k0"] + int(plot_h) + 1].astype(np.float64).copy()
         if args.out_full_png:
             out_full = str(args.out_full_png)
         else:

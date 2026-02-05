@@ -52,7 +52,14 @@
       "val_ratio": 0.1
     },
     "real": {
-      "qd_lpf_hz": 30.0
+      "qd_col": "dq_rad_s",
+      "feature_set": "full",
+      "qd_filter": {
+        "method": "zero_phase_one_pole",
+        "cutoff_hz": 30.0
+      },
+      "qd_use_filtered": true,
+      "use_tau_ff_from_csv": false
     }
   },
   "real": {
@@ -60,4 +67,3 @@
     "kd": 0.01
   }
 }
-
